@@ -1,6 +1,6 @@
 {
   "name": "kaleido-mcp",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Unified MCP server for KaleidoSwap — WDK Spark wallet, RLN node, KaleidoSwap DEX, MPP/L402 payments, and 402index discovery in a single server",
   "type": "module",
   "main": "./dist/index.js",
