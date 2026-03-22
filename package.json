@@ -33,7 +33,7 @@
     "@tetherto/wdk": "^1.0.0-beta.5",
     "@tetherto/wdk-mcp-toolkit": "github:tetherto/wdk-mcp-toolkit",
     "@tetherto/wdk-wallet-spark": "^1.0.0-beta.11",
-    "kaleido-sdk": "@kaleidoswap/kaleido-sdk",
+    "kaleido-sdk": "0.1.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {
