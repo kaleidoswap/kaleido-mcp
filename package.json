@@ -4,6 +4,14 @@
   "description": "Unified MCP server for KaleidoSwap — WDK Spark wallet, RLN node, KaleidoSwap DEX, MPP/L402 payments, and 402index discovery in a single server",
   "type": "module",
   "main": "./dist/index.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kaleidoswap/kaleido-mcp"
+  },
+  "homepage": "https://github.com/kaleidoswap/kaleido-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/kaleidoswap/kaleido-mcp/issues"
+  },
   "exports": {
     ".": {
       "import": "./dist/index.js",
@@ -16,9 +24,7 @@
       "default": "./dist/mpp-client.js"
     }
   },
-  "bin": {
-    "kaleido-mcp": "./dist/index.js"
-  },
+  "bin": "dist/index.js",
   "files": ["dist/", "README.md"],
   "publishConfig": { "access": "public" },
   "scripts": {
