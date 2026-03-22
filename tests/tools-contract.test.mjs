@@ -1,5 +1,5 @@
 import test from 'node:test'
-import { assertHasAllTools, listToolNames } from '../../scripts/mcp-contract-test-utils.mjs'
+import { assertHasAllTools, listToolNames } from './mcp-contract-test-utils.mjs'
 
 const TEST_MNEMONIC = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
 
