@@ -3,7 +3,7 @@
  */
 import { z } from 'zod'
 import type { WdkMcpServer } from '@tetherto/wdk-mcp-toolkit'
-import { MppClient } from 'kaleido-sdk/mpp'
+import { MppClient } from '../mpp-client.js'
 
 export function registerMppTools(server: WdkMcpServer): void {
   const mpp = new MppClient()
