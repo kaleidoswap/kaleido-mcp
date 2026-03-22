@@ -73,24 +73,28 @@ export function createServer(config: KaleidoMcpConfig): WdkMcpServer {
   const server = new WdkMcpServer('kaleido-mcp', '1.0.0')
 
   if (config.wdkSeed) {
-    server
-      .useWdk({ seed: config.wdkSeed })
-      .registerWallet('spark', WalletManagerSpark, {
-        network: config.sparkNetwork,
-        ...(config.sparkScanApiKey ? { sparkScanApiKey: config.sparkScanApiKey } : {}),
-      })
-      .usePricing()
-      .registerTools([
-        // Built-in WDK wallet tools (scoped to 'spark' chain automatically via getChains())
-        ...WALLET_TOOLS,
-        // Bitfinex pricing: getCurrentPrice, getHistoricalPrice
-        ...PRICING_TOOLS,
-      ])
+    try {
+      server
+        .useWdk({ seed: config.wdkSeed })
+        .registerWallet('spark', WalletManagerSpark, {
+          network: config.sparkNetwork,
+          ...(config.sparkScanApiKey ? { sparkScanApiKey: config.sparkScanApiKey } : {}),
+        })
+        .usePricing()
+        .registerTools([
+          // Built-in WDK wallet tools (scoped to 'spark' chain automatically via getChains())
+          ...WALLET_TOOLS,
+          // Bitfinex pricing: getCurrentPrice, getHistoricalPrice
+          ...PRICING_TOOLS,
+        ])
 
-    // -------------------------------------------------------------------------
-    // 2. Spark-specific custom tools (Lightning invoices, BTC bridge, MPP)
-    // -------------------------------------------------------------------------
-    registerSparkTools(server, config.sparkUsdtToken)
+      // -----------------------------------------------------------------------
+      // 2. Spark-specific custom tools (Lightning invoices, BTC bridge, MPP)
+      // -----------------------------------------------------------------------
+      registerSparkTools(server, config.sparkUsdtToken)
+    } catch (error) {
+      process.stderr.write(`[kaleido-mcp] Spark tools disabled (invalid WDK_SEED): ${error}\n`)
+    }
   } else {
     process.stderr.write('[kaleido-mcp] Spark tools disabled (WDK_SEED not set)\n')
   }
