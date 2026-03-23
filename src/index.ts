@@ -61,6 +61,11 @@ async function main() {
   if (PORT) {
     const AUTH_TOKEN = process.env.MCP_AUTH_TOKEN ?? null
     const httpServer = createHttpServer(async (req: IncomingMessage, res: ServerResponse) => {
+      if (req.method === 'GET' && req.url === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: true }))
+        return
+      }
       if (AUTH_TOKEN && req.headers['authorization'] !== `Bearer ${AUTH_TOKEN}`) {
         res.writeHead(401, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ error: 'Unauthorized' }))
