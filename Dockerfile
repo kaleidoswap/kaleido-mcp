@@ -6,7 +6,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
-RUN npm install
+RUN npm install --ignore-scripts
 COPY . .
 RUN npm run build && npm prune --omit=dev
 
