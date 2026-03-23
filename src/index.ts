@@ -10,7 +10,7 @@
  *   • 402index.io          (discover paid APIs by protocol/category)
  *   • Market data          (prices, OHLCV, Fear & Greed sentiment)
  *
- * ~60 tools, one process, one connection.
+ * ~64 tools, one process, one connection.
  *
  * Required env vars:
  *   WDK_SEED          — BIP-39 mnemonic for Spark wallet
