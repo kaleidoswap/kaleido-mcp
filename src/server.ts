@@ -112,7 +112,7 @@ export function createServer(config: KaleidoMcpConfig): WdkMcpServer {
   // -------------------------------------------------------------------------
   // 4. KaleidoSwap DEX tools (quotes, orders, atomic, LSP)
   // -------------------------------------------------------------------------
-  registerKaleidoswapTools(server, sdk.maker)
+  registerKaleidoswapTools(server, sdk.maker, sdk.rln)
 
   // -------------------------------------------------------------------------
   // 5. MPP / L402 / 402index.io discovery

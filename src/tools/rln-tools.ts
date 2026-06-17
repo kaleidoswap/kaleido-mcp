@@ -104,7 +104,8 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
       const invoice = await rln.createRgbInvoice({
         ...(asset_id ? { asset_id } : {}),
         ...(amount !== undefined ? { assignment: toFungibleAssignment(amount) } : {}),
-        duration_seconds: duration_seconds ?? 86400,
+        // kaleido-sdk 0.1.8 replaced duration_seconds with an absolute expiry timestamp.
+        expiration_timestamp: Math.floor(Date.now() / 1000) + (duration_seconds ?? 86400),
         min_confirmations: 1,
         witness: false,
       })
@@ -195,7 +196,7 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
             transport_endpoints: transport_endpoints ?? [],
           }],
         },
-        skip_sync: false,
+        // kaleido-sdk 0.1.8 dropped skip_sync from SendRgbRequest.
       })
       return t(JSON.stringify({
         sent: true,
