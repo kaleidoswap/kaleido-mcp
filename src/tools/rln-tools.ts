@@ -42,7 +42,7 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
   // -----------------------------------------------------------------------
   registerAliases(
     ['wdk_get_balances', 'rln_get_balances'],
-    'Get RLN wallet balances: BTC on-chain (vanilla/colored UTXOs) and Lightning balance. For RGB asset balances use wdk_get_asset_balance.',
+    'Get RLN wallet balances: BTC on-chain (vanilla/colored UTXOs) and Lightning balance. For RGB asset balances use rln_get_asset_balance.',
     { skip_sync: z.boolean().optional().describe('Skip blockchain sync for faster response (default: false)') },
     async ({ skip_sync = false }: { skip_sync?: boolean }) => {
       const [btc, node] = await Promise.all([rln.getBtcBalance(skip_sync), rln.getNodeInfo()])
@@ -123,13 +123,13 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
     ['wdk_create_ln_invoice', 'rln_create_ln_invoice'],
     'Create a BOLT11 Lightning invoice to receive BTC via Lightning Network into the RLN node.',
     {
-      amount_msat: z.number().int().positive().optional().describe('Amount in millisatoshis. Omit for any-amount.'),
+      amount_sats: z.number().int().positive().optional().describe('Amount in satoshis. Omit for any-amount.'),
       description: z.string().optional(),
       expiry_sec: z.number().int().positive().optional().describe('Expiry in seconds (default: 3600)'),
     },
-    async ({ amount_msat, description, expiry_sec }: { amount_msat?: number; description?: string; expiry_sec?: number }) =>
+    async ({ amount_sats, description, expiry_sec }: { amount_sats?: number; description?: string; expiry_sec?: number }) =>
       t(JSON.stringify(await rln.createLNInvoice({
-        amt_msat: amount_msat,
+        amt_msat: amount_sats === undefined ? undefined : amount_sats * 1000,
         expiry_sec: expiry_sec ?? 3600,
       }), null, 2)),
   )
@@ -137,7 +137,7 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
   // -----------------------------------------------------------------------
   registerAliases(
     ['wdk_pay_invoice', 'rln_pay_invoice'],
-    'Pay a BOLT11 Lightning invoice from the RLN node. Use to fund KaleidoSwap deposit after placing a REST swap order.',
+    'Pay a BOLT11 Lightning invoice from the RLN node. Pass the exact full invoice in the required invoice field.',
     { invoice: z.string().describe('BOLT11 invoice string (lnbc... or lntb...)') },
     async ({ invoice }: { invoice: string }) => t(JSON.stringify(await rln.sendPayment({ invoice }), null, 2)),
   )
@@ -275,17 +275,17 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
         public: is_public ?? false,
         with_anchors: false,
       })
-      return t(JSON.stringify({ ...result, note: 'Use wdk_list_channels to monitor until status=Opened' }, null, 2))
+      return t(JSON.stringify({ ...result, note: 'Use rln_list_channels to monitor until status=Opened' }, null, 2))
     },
   )
 
   // -----------------------------------------------------------------------
   registerAliases(
     ['wdk_close_channel', 'rln_close_channel'],
-    'Close a Lightning channel on the RLN node. Use force=true only for unresponsive peers. Get channel_id from wdk_list_channels.',
+    'Close a Lightning channel on the RLN node. Use force=true only for unresponsive peers. Get channel_id from rln_list_channels.',
     {
-      channel_id: z.string().describe('Channel ID from wdk_list_channels'),
-      peer_pubkey: z.string().describe('Peer pubkey from wdk_list_channels'),
+      channel_id: z.string().describe('Channel ID from rln_list_channels'),
+      peer_pubkey: z.string().describe('Peer pubkey from rln_list_channels'),
       force: z.boolean().optional().describe('Force close (unilateral). Default: false (cooperative close)'),
     },
     async ({
@@ -301,9 +301,9 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
   // -----------------------------------------------------------------------
   registerAliases(
     ['wdk_get_channel_id', 'rln_get_channel_id'],
-    'Resolve a temporary_channel_id (from wdk_open_channel) to the permanent channel_id once the channel is established.',
+    'Resolve a temporary_channel_id (from rln_open_channel) to the permanent channel_id once the channel is established.',
     {
-      temporary_channel_id: z.string().describe('Temporary channel ID from wdk_open_channel'),
+      temporary_channel_id: z.string().describe('Temporary channel ID from rln_open_channel'),
     },
     async ({ temporary_channel_id }: { temporary_channel_id: string }) =>
       t(JSON.stringify(await rln.getChannelId({ temporary_channel_id }), null, 2)),
@@ -340,7 +340,8 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
     'Refresh pending RGB asset transfers on the RLN node. Call after a KaleidoSwap order is FILLED to sync balances.',
     { skip_sync: z.boolean().optional() },
     async ({ skip_sync = false }: { skip_sync?: boolean }) => {
-      await rln.refreshTransfers({ skip_sync })
+      // kaleido-sdk 0.1.11 (RLN 0.7.1) made `filter` required; [] refreshes all.
+      await rln.refreshTransfers({ skip_sync, filter: [] })
       return t(JSON.stringify({ refreshed: true }, null, 2))
     },
   )
@@ -354,7 +355,7 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
       await rln.whitelistSwap({ swapstring })
       return t(JSON.stringify({
         success: true,
-        note: 'HTLC whitelisted — now call wdk_get_node_info for pubkey, then kaleidoswap_atomic_execute',
+        note: 'HTLC whitelisted — now call rln_get_node_info for pubkey, then kaleidoswap_atomic_execute',
       }, null, 2))
     },
   )

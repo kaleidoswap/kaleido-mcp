@@ -263,7 +263,9 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
   server.tool('kaleidoswap_lsp_estimate_fees',
     'Estimate LSPS1 channel opening fees (setup, capacity, duration, total). Call before kaleidoswap_lsp_create_order.',
     {
-      client_pubkey: z.string(), lsp_balance_sat: z.number().int().positive(),
+      // client_pubkey is optional — the maker prices a fee estimate from the
+      // amounts/expiry alone, and recipes estimate BEFORE fetching the pubkey.
+      client_pubkey: z.string().optional(), lsp_balance_sat: z.number().int().positive(),
       client_balance_sat: z.number().int().min(0), channel_expiry_blocks: z.number().int().positive(),
       required_channel_confirmations: z.number().int().min(0).optional(),
       funding_confirms_within_blocks: z.number().int().positive().optional(),
@@ -282,15 +284,17 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
     {
       client_pubkey: z.string(), lsp_balance_sat: z.number().int().positive(),
       client_balance_sat: z.number().int().min(0),
-      required_channel_confirmations: z.number().int().min(0).describe('0 for zero-conf'),
-      funding_confirms_within_blocks: z.number().int().positive(),
+      // These three default server-side when omitted, so a deterministic recipe
+      // doesn't have to supply LSPS1 plumbing it doesn't care about.
+      required_channel_confirmations: z.number().int().min(0).optional().describe('0 for zero-conf (default 0)'),
+      funding_confirms_within_blocks: z.number().int().positive().optional().describe('default 6'),
       channel_expiry_blocks: z.number().int().positive(),
-      announce_channel: z.boolean(),
+      announce_channel: z.boolean().optional().describe('default false (private)'),
       asset_id: z.string().optional(), lsp_asset_amount: z.number().optional(),
       client_asset_amount: z.number().optional(), rfq_id: z.string().optional(),
     },
     async ({ client_pubkey, lsp_balance_sat, client_balance_sat, required_channel_confirmations, funding_confirms_within_blocks, channel_expiry_blocks, announce_channel, asset_id, lsp_asset_amount, client_asset_amount, rfq_id }) => {
-      const body: Record<string, unknown> = { client_pubkey, lsp_balance_sat, client_balance_sat, required_channel_confirmations, funding_confirms_within_blocks, channel_expiry_blocks, announce_channel }
+      const body: Record<string, unknown> = { client_pubkey, lsp_balance_sat, client_balance_sat, required_channel_confirmations: required_channel_confirmations ?? 0, funding_confirms_within_blocks: funding_confirms_within_blocks ?? 6, channel_expiry_blocks, announce_channel: announce_channel ?? false }
       if (asset_id) body.asset_id = asset_id; if (lsp_asset_amount !== undefined) body.lsp_asset_amount = lsp_asset_amount; if (client_asset_amount !== undefined) body.client_asset_amount = client_asset_amount; if (rfq_id) body.rfq_id = rfq_id
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const order = await maker.createLspOrder(body as any)
@@ -299,7 +303,11 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
       const bolt11 = payment?.bolt11?.invoice ?? payment?.bolt11_invoice ?? null
       const onchain_address = payment?.onchain?.address ?? payment?.onchain_address ?? null
       const onchain_amount_sat = payment?.onchain?.fee_total_sat ?? payment?.onchain?.order_total_sat ?? null
-      return t(JSON.stringify({ order_id: order.order_id, order_state: order.order_state, bolt11_invoice: bolt11, onchain_address, onchain_amount_sat, fee_total_sat: payment?.bolt11?.fee_total_sat ?? payment?.fee_total_sat ?? null, order_total_sat: payment?.bolt11?.order_total_sat ?? payment?.order_total_sat ?? null, instruction: 'Pay via rln_pay_invoice (Lightning). If Lightning fails (no channels), use rln_send_btc with onchain_address. Never use spark_pay_lightning_invoice for LSP orders. Poll with kaleidoswap_lsp_get_order.' }, null, 2))
+      // Spread the raw order FIRST so the nested `payment.bolt11.invoice` +
+      // `access_token` + accepted balances survive — the channel-order recipe
+      // reads those to auto-pay (rln_pay_invoice) and verify. The flat fields
+      // below stay for the agentic path + back-compat.
+      return t(JSON.stringify({ ...order, order_id: order.order_id, order_state: order.order_state, bolt11_invoice: bolt11, onchain_address, onchain_amount_sat, fee_total_sat: payment?.bolt11?.fee_total_sat ?? payment?.fee_total_sat ?? null, order_total_sat: payment?.bolt11?.order_total_sat ?? payment?.order_total_sat ?? null, instruction: 'Pay via rln_pay_invoice (Lightning). If Lightning fails (no channels), use rln_send_btc with onchain_address. Never use spark_pay_lightning_invoice for LSP orders. Poll with kaleidoswap_lsp_get_order.' }, null, 2))
     })
 
   // -----------------------------------------------------------------------
@@ -402,10 +410,12 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
       rfq_id: z.string().describe('The rfq_id from kaleidoswap_lsp_quote_asset_channel (must still be valid)'),
       // Display-only passthrough echoed from the quote so the host's confirm UI can
       // show the cost before approval. The handler ignores these — do not set them yourself.
-      total_sat: z.number().optional().describe('Internal: total cost in sats (from the quote). Do not set.'),
-      btc_amount_sat: z.number().optional().describe('Internal: asset price in sats (from the quote). Do not set.'),
-      channel_fee_sat: z.number().optional().describe('Internal: channel fee in sats (from the quote). Do not set.'),
-      expires_at: z.number().optional().describe('Internal: quote expiry unix seconds. Do not set.'),
+      // Display-only echoes from the quote; the handler ignores them. Nullable
+      // because the quote may not have a fee estimate yet (channel_fee_sat null).
+      total_sat: z.number().nullable().optional().describe('Internal: total cost in sats (from the quote). Do not set.'),
+      btc_amount_sat: z.number().nullable().optional().describe('Internal: asset price in sats (from the quote). Do not set.'),
+      channel_fee_sat: z.number().nullable().optional().describe('Internal: channel fee in sats (from the quote). Do not set.'),
+      expires_at: z.number().nullable().optional().describe('Internal: quote expiry unix seconds. Do not set.'),
     },
     async ({ asset, asset_amount, rfq_id }) => {
       if (!rln) return t(JSON.stringify({ error: 'Node client unavailable — cannot resolve the client pubkey to open a channel.' }))
