@@ -1,6 +1,6 @@
 {
   "name": "kaleido-mcp",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Unified MCP server for KaleidoSwap — WDK Spark wallet, RLN node, KaleidoSwap DEX, MPP/L402 payments, and 402index discovery in a single server",
   "type": "module",
   "main": "./dist/index.js",
@@ -45,7 +45,7 @@
     "@tetherto/wdk": "^1.0.0-beta.5",
     "@tetherto/wdk-mcp-toolkit": "github:tetherto/wdk-mcp-toolkit",
     "@tetherto/wdk-wallet-spark": "^1.0.0-beta.11",
-    "kaleido-sdk": "0.1.0",
+    "kaleido-sdk": "^0.1.11",
     "zod": "^3.24.2"
   },
   "devDependencies": {

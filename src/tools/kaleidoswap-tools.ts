@@ -6,6 +6,14 @@ import { z } from 'zod'
 import type { WdkMcpServer } from '@tetherto/wdk-mcp-toolkit'
 import type { MakerClient } from 'kaleido-sdk'
 
+/** Minimal node-client surface this module needs (RlnClient is structurally compatible). */
+interface NodeClientLike {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  getNodeInfo(): Promise<any>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  getAddress(): Promise<any>
+}
+
 interface TrackedOrder {
   orderId: string; fromAssetId: string; toAssetId: string
   fromLayer: string; toLayer: string; fromAmount: number; toAmount: number
@@ -16,7 +24,7 @@ interface TrackedOrder {
 // In-memory store — persists for process lifetime
 const orderStore = new Map<string, TrackedOrder>()
 
-export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClient): void {
+export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClient, rln?: NodeClientLike): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function findAsset(assets: any[], id: string) {
     return assets.find(a =>
@@ -255,7 +263,9 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
   server.tool('kaleidoswap_lsp_estimate_fees',
     'Estimate LSPS1 channel opening fees (setup, capacity, duration, total). Call before kaleidoswap_lsp_create_order.',
     {
-      client_pubkey: z.string(), lsp_balance_sat: z.number().int().positive(),
+      // client_pubkey is optional — the maker prices a fee estimate from the
+      // amounts/expiry alone, and recipes estimate BEFORE fetching the pubkey.
+      client_pubkey: z.string().optional(), lsp_balance_sat: z.number().int().positive(),
       client_balance_sat: z.number().int().min(0), channel_expiry_blocks: z.number().int().positive(),
       required_channel_confirmations: z.number().int().min(0).optional(),
       funding_confirms_within_blocks: z.number().int().positive().optional(),
@@ -274,15 +284,17 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
     {
       client_pubkey: z.string(), lsp_balance_sat: z.number().int().positive(),
       client_balance_sat: z.number().int().min(0),
-      required_channel_confirmations: z.number().int().min(0).describe('0 for zero-conf'),
-      funding_confirms_within_blocks: z.number().int().positive(),
+      // These three default server-side when omitted, so a deterministic recipe
+      // doesn't have to supply LSPS1 plumbing it doesn't care about.
+      required_channel_confirmations: z.number().int().min(0).optional().describe('0 for zero-conf (default 0)'),
+      funding_confirms_within_blocks: z.number().int().positive().optional().describe('default 6'),
       channel_expiry_blocks: z.number().int().positive(),
-      announce_channel: z.boolean(),
+      announce_channel: z.boolean().optional().describe('default false (private)'),
       asset_id: z.string().optional(), lsp_asset_amount: z.number().optional(),
       client_asset_amount: z.number().optional(), rfq_id: z.string().optional(),
     },
     async ({ client_pubkey, lsp_balance_sat, client_balance_sat, required_channel_confirmations, funding_confirms_within_blocks, channel_expiry_blocks, announce_channel, asset_id, lsp_asset_amount, client_asset_amount, rfq_id }) => {
-      const body: Record<string, unknown> = { client_pubkey, lsp_balance_sat, client_balance_sat, required_channel_confirmations, funding_confirms_within_blocks, channel_expiry_blocks, announce_channel }
+      const body: Record<string, unknown> = { client_pubkey, lsp_balance_sat, client_balance_sat, required_channel_confirmations: required_channel_confirmations ?? 0, funding_confirms_within_blocks: funding_confirms_within_blocks ?? 6, channel_expiry_blocks, announce_channel: announce_channel ?? false }
       if (asset_id) body.asset_id = asset_id; if (lsp_asset_amount !== undefined) body.lsp_asset_amount = lsp_asset_amount; if (client_asset_amount !== undefined) body.client_asset_amount = client_asset_amount; if (rfq_id) body.rfq_id = rfq_id
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const order = await maker.createLspOrder(body as any)
@@ -291,7 +303,11 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
       const bolt11 = payment?.bolt11?.invoice ?? payment?.bolt11_invoice ?? null
       const onchain_address = payment?.onchain?.address ?? payment?.onchain_address ?? null
       const onchain_amount_sat = payment?.onchain?.fee_total_sat ?? payment?.onchain?.order_total_sat ?? null
-      return t(JSON.stringify({ order_id: order.order_id, order_state: order.order_state, bolt11_invoice: bolt11, onchain_address, onchain_amount_sat, fee_total_sat: payment?.bolt11?.fee_total_sat ?? payment?.fee_total_sat ?? null, order_total_sat: payment?.bolt11?.order_total_sat ?? payment?.order_total_sat ?? null, instruction: 'Pay via rln_pay_invoice (Lightning). If Lightning fails (no channels), use rln_send_btc with onchain_address. Never use spark_pay_lightning_invoice for LSP orders. Poll with kaleidoswap_lsp_get_order.' }, null, 2))
+      // Spread the raw order FIRST so the nested `payment.bolt11.invoice` +
+      // `access_token` + accepted balances survive — the channel-order recipe
+      // reads those to auto-pay (rln_pay_invoice) and verify. The flat fields
+      // below stay for the agentic path + back-compat.
+      return t(JSON.stringify({ ...order, order_id: order.order_id, order_state: order.order_state, bolt11_invoice: bolt11, onchain_address, onchain_amount_sat, fee_total_sat: payment?.bolt11?.fee_total_sat ?? payment?.fee_total_sat ?? null, order_total_sat: payment?.bolt11?.order_total_sat ?? payment?.order_total_sat ?? null, instruction: 'Pay via rln_pay_invoice (Lightning). If Lightning fails (no channels), use rln_send_btc with onchain_address. Never use spark_pay_lightning_invoice for LSP orders. Poll with kaleidoswap_lsp_get_order.' }, null, 2))
     })
 
   // -----------------------------------------------------------------------
@@ -300,6 +316,146 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
     { order_id: z.string() },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async ({ order_id }) => t(JSON.stringify(await maker.getLspOrder({ order_id } as any), null, 2)))
+
+  // -----------------------------------------------------------------------
+  // High-level "buy an asset channel" wrappers — the onboarding buy. They
+  // resolve the asset, size the channel from LSP info, and (for create) fetch
+  // the node pubkey + refund address, so the agent only supplies {asset,
+  // asset_amount[, rfq_id]} instead of the full LSPS1 payload.
+  // -----------------------------------------------------------------------
+
+  /** Resolve a ticker/id to { ticker, asset_id (RGB protocol id), precision }. */
+  async function resolveRgbAsset(input: string) {
+    const { assets } = await maker.listAssets()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const found: any = findAsset(assets as any[], input) ?? findAsset(assets as any[], input.toUpperCase())
+    if (!found) return null
+    const asset_id: string = found.protocol_ids
+      ? (Object.values(found.protocol_ids as Record<string, string>)[0] as string)
+      : (found.asset_id ?? found.ticker)
+    return { ticker: found.ticker as string, asset_id, precision: (found.precision as number) ?? 0 }
+  }
+
+  /** Size a BTC+asset channel for the onboarding buy from LSP options + sensible defaults. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function deriveChannelParams(info: any, rawAssetAmount: number) {
+    const opts = info?.options ?? {}
+    const lsp_balance_sat: number = opts.min_channel_balance_sat ?? opts.min_initial_lsp_balance_sat ?? 50_000
+    const maxExpiry: number = opts.max_channel_expiry_blocks ?? 13_140
+    return {
+      lsp_balance_sat,
+      client_balance_sat: 0,
+      channel_expiry_blocks: Math.min(13_140, maxExpiry), // ~3 months, clamped to LSP max
+      required_channel_confirmations: opts.min_required_channel_confirmations ?? 0, // 0-conf onboarding when allowed
+      funding_confirms_within_blocks: opts.min_funding_confirms_within_blocks ?? 6,
+      lsp_asset_amount: rawAssetAmount,
+      client_asset_amount: rawAssetAmount, // pushed to the buyer = what they receive
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  server.tool('kaleidoswap_lsp_quote_asset_channel',
+    'Quote buying a NEW Lightning channel pre-loaded with an RGB asset (USDT, XAUT) from the KaleidoSwap LSP — the onboarding path for a user with on-chain BTC but no channel yet. Resolves the asset, prices it via RFQ, and returns an rfq_id plus the BTC cost so you can show it before ordering. Read-only.',
+    {
+      asset: z.string().describe('Asset ticker or id, e.g. "USDT" or "XAUT"'),
+      asset_amount: z.number().positive().describe('Amount of the asset to load into the channel, in display units (e.g. 100)'),
+    },
+    async ({ asset, asset_amount }) => {
+      const a = await resolveRgbAsset(asset)
+      if (!a) return t(JSON.stringify({ error: `Unknown asset: ${asset}` }))
+      const raw = maker.toRaw(asset_amount, a.precision)
+      const info = await maker.getLspInfo()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const quote: any = await maker.getQuote({ from_asset: { asset_id: 'BTC', layer: 'BTC_LN' }, to_asset: { asset_id: a.asset_id, layer: 'RGB_LN', amount: raw } } as any)
+      const btc_amount_sat: number | null = quote?.from_asset?.amount ?? null
+      const params = deriveChannelParams(info, raw)
+      // Best-effort fee estimate; never block the quote on it.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let channel_fee_sat: number | null = null
+      try {
+        if (rln) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const node: any = await rln.getNodeInfo()
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const est: any = await maker.estimateLspFees({ client_pubkey: node.pubkey, lsp_balance_sat: params.lsp_balance_sat, client_balance_sat: 0, channel_expiry_blocks: params.channel_expiry_blocks, required_channel_confirmations: params.required_channel_confirmations, funding_confirms_within_blocks: params.funding_confirms_within_blocks, asset_id: a.asset_id, lsp_asset_amount: raw, rfq_id: quote.rfq_id } as any)
+          channel_fee_sat = est?.fee_total_sat ?? est?.total_fee_sat ?? est?.order_total_sat ?? null
+        }
+      } catch {
+        channel_fee_sat = null
+      }
+      const total_sat = (typeof btc_amount_sat === 'number' && typeof channel_fee_sat === 'number')
+        ? btc_amount_sat + channel_fee_sat
+        : (channel_fee_sat ?? btc_amount_sat)
+      return t(JSON.stringify({
+        rfq_id: quote.rfq_id,
+        asset: a.ticker,
+        asset_amount,
+        asset_id: a.asset_id,
+        btc_amount_sat,
+        channel_fee_sat,
+        total_sat,
+        lsp_balance_sat: params.lsp_balance_sat,
+        channel_expiry_blocks: params.channel_expiry_blocks,
+        expires_at: quote.expires_at,
+        instruction: 'Show total_sat to the user; on approval call kaleidoswap_lsp_create_asset_channel with this rfq_id.',
+      }, null, 2))
+    })
+
+  // -----------------------------------------------------------------------
+  server.tool('kaleidoswap_lsp_create_asset_channel',
+    'Order a NEW Lightning channel pre-loaded with an RGB asset from the KaleidoSwap LSP, using a fresh rfq_id from kaleidoswap_lsp_quote_asset_channel. SPEND: confirmation-gated. Returns order_id + the payment (bolt11 invoice or on-chain address) the user pays to open the channel; the channel (holding the asset) opens after the payment confirms. Poll kaleidoswap_lsp_get_order until COMPLETED.',
+    {
+      asset: z.string().describe('Asset ticker or id (must match the quote)'),
+      asset_amount: z.number().positive().describe('Asset amount in display units (must match the quote)'),
+      rfq_id: z.string().describe('The rfq_id from kaleidoswap_lsp_quote_asset_channel (must still be valid)'),
+      // Display-only passthrough echoed from the quote so the host's confirm UI can
+      // show the cost before approval. The handler ignores these — do not set them yourself.
+      // Display-only echoes from the quote; the handler ignores them. Nullable
+      // because the quote may not have a fee estimate yet (channel_fee_sat null).
+      total_sat: z.number().nullable().optional().describe('Internal: total cost in sats (from the quote). Do not set.'),
+      btc_amount_sat: z.number().nullable().optional().describe('Internal: asset price in sats (from the quote). Do not set.'),
+      channel_fee_sat: z.number().nullable().optional().describe('Internal: channel fee in sats (from the quote). Do not set.'),
+      expires_at: z.number().nullable().optional().describe('Internal: quote expiry unix seconds. Do not set.'),
+    },
+    async ({ asset, asset_amount, rfq_id }) => {
+      if (!rln) return t(JSON.stringify({ error: 'Node client unavailable — cannot resolve the client pubkey to open a channel.' }))
+      const a = await resolveRgbAsset(asset)
+      if (!a) return t(JSON.stringify({ error: `Unknown asset: ${asset}` }))
+      const raw = maker.toRaw(asset_amount, a.precision)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const [info, node, addr]: [any, any, any] = await Promise.all([maker.getLspInfo(), rln.getNodeInfo(), rln.getAddress()])
+      const params = deriveChannelParams(info, raw)
+      const body: Record<string, unknown> = {
+        client_pubkey: node.pubkey,
+        lsp_balance_sat: params.lsp_balance_sat,
+        client_balance_sat: 0,
+        required_channel_confirmations: params.required_channel_confirmations,
+        funding_confirms_within_blocks: params.funding_confirms_within_blocks,
+        channel_expiry_blocks: params.channel_expiry_blocks,
+        announce_channel: true,
+        refund_onchain_address: addr.address,
+        asset_id: a.asset_id,
+        lsp_asset_amount: raw,
+        client_asset_amount: raw,
+        rfq_id,
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const order: any = await maker.createLspOrder(body as any)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const payment: any = order.payment
+      const bolt11 = payment?.bolt11?.invoice ?? payment?.bolt11_invoice ?? null
+      const onchain_address = payment?.onchain?.address ?? payment?.onchain_address ?? null
+      const total_sat = payment?.bolt11?.order_total_sat ?? payment?.onchain?.order_total_sat ?? payment?.order_total_sat ?? null
+      return t(JSON.stringify({
+        order_id: order.order_id,
+        order_state: order.order_state,
+        asset: a.ticker,
+        asset_amount,
+        total_sat,
+        payment: { bolt11_invoice: bolt11, onchain_address },
+        instruction: 'Pay via rln_pay_invoice (Lightning) or rln_send_btc to onchain_address. Poll kaleidoswap_lsp_get_order until COMPLETED — the channel with the asset opens after payment confirms.',
+      }, null, 2))
+    })
 }
 
 const t = (content: string) => ({ content: [{ type: 'text' as const, text: content }] })
