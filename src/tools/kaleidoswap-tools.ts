@@ -45,6 +45,15 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
     return undefined
   }
 
+  // Derive the settlement layer for an asset on the KaleidoSwap atomic venue
+  // (BTC ↔ RGB): BTC settles on Lightning, RGB assets on RGB-over-Lightning.
+  // Used when a caller (e.g. a deterministic recipe) omits the layer.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function deriveLayer(id: string, asset?: any): string {
+    const ticker = String(asset?.ticker ?? id).toUpperCase()
+    return ticker === 'BTC' ? 'BTC_LN' : 'RGB_LN'
+  }
+
   // -----------------------------------------------------------------------
   server.tool('kaleidoswap_get_assets',
     'List all assets tradeable on KaleidoSwap. Returns ticker, name, precision, and RGB protocol ID for each asset.',
@@ -73,22 +82,35 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
 
   // -----------------------------------------------------------------------
   server.tool('kaleidoswap_get_quote',
-    'Get a price quote for a swap. Returns expected output amount, price, fee, and rfq_id (use in kaleidoswap_place_order or kaleidoswap_atomic_init). Quote expires in ~60s.',
+    'Get a price quote for a swap. Returns expected output amount, price, fee, and rfq_id (use in kaleidoswap_place_order or kaleidoswap_atomic_init). Quote expires in ~60s. Specify the amount on exactly one leg: from_amount to SELL a fixed input, or to_amount to BUY a fixed output (e.g. "buy 1 USDT" → to_amount=1). Layers default to BTC_LN for BTC and RGB_LN for RGB assets when omitted.',
     {
       from_asset_id: z.string().describe("Asset to sell — ticker ('BTC') or RGB protocol ID ('rgb:...')"),
       to_asset_id: z.string().describe('Asset to buy'),
-      from_layer: z.string().describe("Source layer: 'BTC_LN', 'BTC_SPARK', 'RGB_LN'"),
-      to_layer: z.string().describe("Destination layer: 'RGB_LN', 'BTC_SPARK', 'BTC_LN'"),
-      from_amount: z.number().positive().describe('Amount to sell in display units (e.g. 0.001 BTC, 100.0 USDT)'),
+      from_layer: z.string().optional().describe("Source layer: 'BTC_LN', 'BTC_SPARK', 'RGB_LN'. Optional — derived from the asset when omitted."),
+      to_layer: z.string().optional().describe("Destination layer: 'RGB_LN', 'BTC_SPARK', 'BTC_LN'. Optional — derived from the asset when omitted."),
+      from_amount: z.number().positive().optional().describe('Amount to SELL in display units (e.g. 0.001 BTC). Provide either from_amount or to_amount, not both.'),
+      to_amount: z.number().positive().optional().describe('Amount to BUY/receive in display units (e.g. 1.0 USDT). Provide either from_amount or to_amount, not both.'),
     },
-    async ({ from_asset_id, to_asset_id, from_layer, to_layer, from_amount }) => {
+    async ({ from_asset_id, to_asset_id, from_layer, to_layer, from_amount, to_amount }) => {
+      if ((from_amount == null) === (to_amount == null)) {
+        throw new Error('Provide exactly one of from_amount (sell) or to_amount (buy).')
+      }
       const [{ assets }, { pairs }] = await Promise.all([maker.listAssets(), maker.listPairs()])
       const fromAsset = await resolveAsset(from_asset_id, assets, pairs)
       if (!fromAsset) throw new Error(`Unknown asset: ${from_asset_id}`)
-      const rawAmount = maker.toRaw(from_amount, fromAsset.precision)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const quote = await maker.getQuote({ from_asset: { asset_id: from_asset_id, layer: from_layer as any, amount: rawAmount }, to_asset: { asset_id: to_asset_id, layer: to_layer as any } })
       const toAsset = await resolveAsset(to_asset_id, assets, pairs)
+      if (!toAsset) throw new Error(`Unknown asset: ${to_asset_id}`)
+      const fLayer = from_layer ?? deriveLayer(from_asset_id, fromAsset)
+      const tLayer = to_layer ?? deriveLayer(to_asset_id, toAsset)
+      // The maker API takes the amount on exactly one leg (SwapLegInput.amount is
+      // optional); the other leg is priced. from_amount → fixed sell, to_amount → fixed buy.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const fromLeg: any = { asset_id: from_asset_id, layer: fLayer }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const toLeg: any = { asset_id: to_asset_id, layer: tLayer }
+      if (from_amount != null) fromLeg.amount = maker.toRaw(from_amount, fromAsset.precision)
+      else toLeg.amount = maker.toRaw(to_amount as number, toAsset.precision)
+      const quote = await maker.getQuote({ from_asset: fromLeg, to_asset: toLeg })
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const toPrecision = toAsset?.precision ?? (quote.to_asset as any).precision
       return t(JSON.stringify({
