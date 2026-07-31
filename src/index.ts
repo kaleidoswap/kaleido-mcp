@@ -9,8 +9,9 @@
  *   • MPP / L402           (payment-gated API access, challenge/credential flow)
  *   • 402index.io          (discover paid APIs by protocol/category)
  *   • Market data          (prices, OHLCV, Fear & Greed sentiment)
+ *   • Node lifecycle       (local Docker signet/regtest env management via `kaleido` CLI)
  *
- * ~64 tools, one process, one connection.
+ * ~75 tools, one process, one connection.
  *
  * Required env vars:
  *   WDK_SEED          — BIP-39 mnemonic for Spark wallet

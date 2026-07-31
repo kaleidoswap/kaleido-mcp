@@ -38,6 +38,11 @@
  *  LAYER 6 — Market data (CoinGecko / alternative.me):
  *    l402_get_price, l402_get_market_data, l402_get_ohlcv, l402_get_sentiment
  *
+ *  LAYER 7 — Node lifecycle (local Docker signet/regtest env management, via `kaleido` CLI):
+ *    kaleido_node_list, kaleido_node_up, kaleido_node_stop, kaleido_node_down, kaleido_node_ps,
+ *    kaleido_node_status, kaleido_node_info, kaleido_node_use, kaleido_node_init,
+ *    kaleido_node_unlock, kaleido_node_lock
+ *
  * Legacy aliases are retained temporarily for older `rln_*` and generic `get_*` callers.
  */
 
@@ -50,6 +55,7 @@ import { registerSparkTools } from './tools/spark-tools.js'
 import { registerKaleidoswapTools } from './tools/kaleidoswap-tools.js'
 import { registerMppTools } from './tools/mpp-tools.js'
 import { registerMarketTools } from './tools/market-tools.js'
+import { registerNodeLifecycleTools } from './tools/node-lifecycle-tools.js'
 
 export interface KaleidoMcpConfig {
   /** BIP-39 seed phrase for WDK Spark wallet */
@@ -123,6 +129,11 @@ export function createServer(config: KaleidoMcpConfig): WdkMcpServer {
   // 6. Market data (CoinGecko + Fear & Greed)
   // -------------------------------------------------------------------------
   registerMarketTools(server)
+
+  // -------------------------------------------------------------------------
+  // 7. Node lifecycle (local Docker signet/regtest env management via CLI)
+  // -------------------------------------------------------------------------
+  registerNodeLifecycleTools(server)
 
   return server
 }
