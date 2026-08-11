@@ -16,7 +16,7 @@ test('kaleido-mcp includes the canonical focused-server contracts and legacy ali
 
   assertHasAllTools(tools, [
     'kaleidoswap_get_quote',
-    'kaleidoswap_place_order',
+    'kaleidoswap_atomic_init',
     'wdk_get_node_info',
     'wdk_get_balances',
     'wdk_mpp_pay',
