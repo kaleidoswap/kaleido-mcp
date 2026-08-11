@@ -25,8 +25,7 @@
  *
  *  LAYER 4 — KaleidoSwap DEX tools:
  *    kaleidoswap_get_assets, kaleidoswap_get_pairs, kaleidoswap_get_quote,
- *    kaleidoswap_get_spreads, kaleidoswap_place_order, kaleidoswap_get_order_status,
- *    kaleidoswap_get_open_orders, kaleidoswap_cancel_order, kaleidoswap_get_position,
+ *    kaleidoswap_get_spreads,
  *    kaleidoswap_atomic_init, kaleidoswap_atomic_execute, kaleidoswap_atomic_status,
  *    kaleidoswap_lsp_get_info, kaleidoswap_lsp_estimate_fees,
  *    kaleidoswap_lsp_create_order, kaleidoswap_lsp_get_order

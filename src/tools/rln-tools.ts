@@ -94,18 +94,21 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
   // -----------------------------------------------------------------------
   registerAliases(
     ['wdk_create_rgb_invoice', 'rln_create_rgb_invoice'],
-    'Create an RGB invoice to receive an RGB asset (USDT, XAUT). Pass the invoice as receiver_address with format=RGB_INVOICE when calling kaleidoswap_place_order.',
+    'Create an RGB invoice to receive an RGB asset (USDT, XAUT). Pass the invoice as receiver_address with format=RGB_INVOICE when settling a swap.',
     {
       asset_id: z.string().optional().describe('RGB asset ID. Omit for any asset.'),
       amount: z.number().positive().optional().describe('Expected amount in display units (e.g. 65.5 for 65.5 USDT)'),
       duration_seconds: z.number().int().positive().optional().describe('Invoice expiry (default: 86400 = 24h)'),
+      transport_endpoints: z.array(z.string()).optional().describe('RGB proxy endpoints the payer fetches the consignment from'),
     },
-    async ({ asset_id, amount, duration_seconds }: { asset_id?: string; amount?: number; duration_seconds?: number }) => {
+    async ({ asset_id, amount, duration_seconds, transport_endpoints }: { asset_id?: string; amount?: number; duration_seconds?: number; transport_endpoints?: string[] }) => {
       const invoice = await rln.createRgbInvoice({
         ...(asset_id ? { asset_id } : {}),
         ...(amount !== undefined ? { assignment: toFungibleAssignment(amount) } : {}),
         // kaleido-sdk 0.1.8 replaced duration_seconds with an absolute expiry timestamp.
         expiration_timestamp: Math.floor(Date.now() / 1000) + (duration_seconds ?? 86400),
+        // Required since kaleido-sdk 0.1.15 (RLN 0.8.0).
+        transport_endpoints: transport_endpoints ?? [],
         min_confirmations: 1,
         witness: false,
       })
@@ -189,6 +192,8 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
         donation: false,
         fee_rate: fee_rate ?? 3,
         min_confirmations: 1,
+        // Required since kaleido-sdk 0.1.15 (RLN 0.8.0).
+        expiration_timestamp: Math.floor(Date.now() / 1000) + 86400,
         recipient_map: {
           [asset_id]: [{
             recipient_id,

@@ -14,16 +14,6 @@ interface NodeClientLike {
   getAddress(): Promise<any>
 }
 
-interface TrackedOrder {
-  orderId: string; fromAssetId: string; toAssetId: string
-  fromLayer: string; toLayer: string; fromAmount: number; toAmount: number
-  depositAddress: string | null; depositAddressFormat: string | null
-  receiverAddress: string; status: string; placedAt: string
-}
-
-// In-memory store — persists for process lifetime
-const orderStore = new Map<string, TrackedOrder>()
-
 export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClient, rln?: NodeClientLike): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function findAsset(assets: any[], id: string) {
@@ -82,7 +72,7 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
 
   // -----------------------------------------------------------------------
   server.tool('kaleidoswap_get_quote',
-    'Get a price quote for a swap. Returns expected output amount, price, fee, and rfq_id (use in kaleidoswap_place_order or kaleidoswap_atomic_init). Quote expires in ~60s. Specify the amount on exactly one leg: from_amount to SELL a fixed input, or to_amount to BUY a fixed output (e.g. "buy 1 USDT" → to_amount=1). Layers default to BTC_LN for BTC and RGB_LN for RGB assets when omitted.',
+    'Get a price quote for a swap. Returns expected output amount, price, fee, and rfq_id (use in kaleidoswap_atomic_init). Quote expires in ~60s. Specify the amount on exactly one leg: from_amount to SELL a fixed input, or to_amount to BUY a fixed output (e.g. "buy 1 USDT" → to_amount=1). Layers default to BTC_LN for BTC and RGB_LN for RGB assets when omitted.',
     {
       from_asset_id: z.string().describe("Asset to sell — ticker ('BTC') or RGB protocol ID ('rgb:...')"),
       to_asset_id: z.string().describe('Asset to buy'),
@@ -158,98 +148,8 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
     })
 
   // -----------------------------------------------------------------------
-  server.tool('kaleidoswap_place_order',
-    'Place a REST swap order on KaleidoSwap. Returns a deposit_address — send the exact from_amount to it to complete the swap.',
-    {
-      from_asset_id: z.string(), to_asset_id: z.string(),
-      from_layer: z.string().describe("Source layer: 'BTC_LN', 'BTC_SPARK', 'RGB_LN'"),
-      to_layer: z.string().describe("Destination layer: 'RGB_LN', 'BTC_LN', 'BTC_SPARK'"),
-      from_amount: z.number().positive().describe('Amount to sell in display units'),
-      receiver_address: z.string().describe('Address where output asset is delivered (RGB invoice, BOLT11, Spark address, etc.)'),
-      receiver_address_format: z.string().describe("'RGB_INVOICE', 'BOLT11', 'BTC_ADDRESS', 'SPARK_ADDRESS'"),
-    },
-    async ({ from_asset_id, to_asset_id, from_layer, to_layer, from_amount, receiver_address, receiver_address_format }) => {
-      const { assets } = await maker.listAssets()
-      const fromAsset = findAsset(assets, from_asset_id)
-      const toAsset = findAsset(assets, to_asset_id)
-      if (!fromAsset) throw new Error(`Unknown asset: ${from_asset_id}`)
-      if (!toAsset) throw new Error(`Unknown asset: ${to_asset_id}`)
-      const rawAmount = maker.toRaw(from_amount, fromAsset.precision)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const quote = await maker.getQuote({ from_asset: { asset_id: from_asset_id, layer: from_layer as any, amount: rawAmount }, to_asset: { asset_id: to_asset_id, layer: to_layer as any } })
-      const order = await maker.createSwapOrder({
-        rfq_id: quote.rfq_id,
-        from_asset: { asset_id: quote.from_asset.asset_id, name: quote.from_asset.name, ticker: quote.from_asset.ticker, layer: quote.from_asset.layer, amount: quote.from_asset.amount, precision: fromAsset.precision },
-        to_asset: { asset_id: quote.to_asset.asset_id, name: quote.to_asset.name, ticker: quote.to_asset.ticker, layer: quote.to_asset.layer, amount: quote.to_asset.amount, precision: toAsset.precision },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        receiver_address: { address: receiver_address, format: receiver_address_format as any },
-        min_onchain_conf: 1,
-      })
-      const fromDisplay = maker.toDisplay(quote.from_asset.amount, fromAsset.precision)
-      const toDisplay = maker.toDisplay(quote.to_asset.amount, toAsset.precision)
-      const tracked: TrackedOrder = { orderId: order.id, fromAssetId: from_asset_id, toAssetId: to_asset_id, fromLayer: from_layer, toLayer: to_layer, fromAmount: fromDisplay, toAmount: toDisplay, depositAddress: order.deposit_address?.address ?? null, depositAddressFormat: order.deposit_address?.format ?? null, receiverAddress: receiver_address, status: order.status, placedAt: new Date().toISOString() }
-      orderStore.set(order.id, tracked)
-      return t(JSON.stringify({ order_id: order.id, status: order.status, deposit_address: order.deposit_address?.address ?? null, deposit_address_format: order.deposit_address?.format ?? null, from_amount: fromDisplay, to_amount: toDisplay, from_ticker: fromAsset.ticker, to_ticker: toAsset.ticker, instruction: `Send ${fromDisplay} ${fromAsset.ticker} to deposit_address to complete swap` }, null, 2))
-    })
-
-  // -----------------------------------------------------------------------
-  server.tool('kaleidoswap_get_order_status',
-    'Check current status of a swap order. Status: PENDING → PROCESSING → FILLED | FAILED | EXPIRED | CANCELLED.',
-    { order_id: z.string() },
-    async ({ order_id }) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { order } = await maker.getSwapOrderStatus({ order_id } as any)
-      const tracked = orderStore.get(order_id)
-      if (tracked && order) { tracked.status = order.status; orderStore.set(order_id, tracked) }
-      return t(JSON.stringify({ order_id: order?.id, status: order?.status, from_asset: order?.from_asset ? { ticker: order.from_asset.ticker, layer: order.from_asset.layer, amount_display: order.from_asset.amount / Math.pow(10, order.from_asset.precision) } : null, to_asset: order?.to_asset ? { ticker: order.to_asset.ticker, layer: order.to_asset.layer, amount_display: order.to_asset.amount / Math.pow(10, order.to_asset.precision) } : null, deposit_address: order?.deposit_address?.address ?? null }, null, 2))
-    })
-
-  // -----------------------------------------------------------------------
-  server.tool('kaleidoswap_get_open_orders',
-    'List swap orders placed in this session with last known status.',
-    { status_filter: z.enum(['all', 'pending', 'active', 'completed']).optional().describe("'pending'=active, 'completed'=terminal, 'all'=default") },
-    async ({ status_filter = 'all' }) => {
-      let orders = Array.from(orderStore.values())
-      if (status_filter === 'pending' || status_filter === 'active') orders = orders.filter(o => ['PENDING', 'PROCESSING'].includes(o.status))
-      else if (status_filter === 'completed') orders = orders.filter(o => ['FILLED', 'FAILED', 'EXPIRED', 'CANCELLED'].includes(o.status))
-      return t(JSON.stringify(orders, null, 2))
-    })
-
-  // -----------------------------------------------------------------------
-  server.tool('kaleidoswap_cancel_order',
-    'Mark an order as cancelled in the local session tracker. Orders without a deposit expire automatically on the server.',
-    { order_id: z.string() },
-    async ({ order_id }) => {
-      const tracked = orderStore.get(order_id)
-      if (!tracked) return t(JSON.stringify({ error: `Order ${order_id} not found in session` }))
-      tracked.status = 'CANCELLED'; orderStore.set(order_id, tracked)
-      return t(JSON.stringify({ order_id, cancelled: true, status: 'CANCELLED' }, null, 2))
-    })
-
-  // -----------------------------------------------------------------------
-  server.tool('kaleidoswap_get_position',
-    'Session trading stats: total orders, fill rate, volume by asset.',
-    {},
-    async () => {
-      const orders = Array.from(orderStore.values())
-      if (orders.length === 0) return t(JSON.stringify({ message: 'No orders in session', orders: 0 }))
-      const byAsset: Record<string, { sold: number; bought: number; ticker: string }> = {}
-      for (const o of orders) {
-        if (o.status === 'FILLED') {
-          if (!byAsset[o.fromAssetId]) byAsset[o.fromAssetId] = { sold: 0, bought: 0, ticker: o.fromAssetId }
-          if (!byAsset[o.toAssetId]) byAsset[o.toAssetId] = { sold: 0, bought: 0, ticker: o.toAssetId }
-          byAsset[o.fromAssetId].sold += o.fromAmount; byAsset[o.toAssetId].bought += o.toAmount
-        }
-      }
-      const total = orders.length, filled = orders.filter(o => o.status === 'FILLED').length
-      const pending = orders.filter(o => ['PENDING', 'PROCESSING'].includes(o.status)).length
-      const failed = orders.filter(o => ['FAILED', 'EXPIRED', 'CANCELLED'].includes(o.status)).length
-      return t(JSON.stringify({ session_summary: { total_orders: total, filled, pending, failed, fill_rate_pct: total > 0 ? ((filled / total) * 100).toFixed(1) : '0.0' }, volume_by_asset: Object.values(byAsset), orders: orders.slice(-10) }, null, 2))
-    })
-
-  // -----------------------------------------------------------------------
   server.tool('kaleidoswap_atomic_init',
-    'Step 1 of atomic HTLC swap: initiate on KaleidoSwap. Returns swapstring and payment_hash. Use raw integer amounts from quote.from_asset.amount_raw / quote.to_asset.amount_raw.',
+    'Step 1 of atomic HTLC swap: initiate on KaleidoSwap. Returns swapstring, payment_hash and access_token. Keep the access_token — it is returned only here and kaleidoswap_atomic_status needs it. Use raw integer amounts from quote.from_asset.amount_raw / quote.to_asset.amount_raw.',
     {
       rfq_id: z.string(), from_asset_id: z.string(),
       from_amount_raw: z.number().int().positive().describe('Raw integer units from quote'),
@@ -269,8 +169,11 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
   // -----------------------------------------------------------------------
   server.tool('kaleidoswap_atomic_status',
     'Poll atomic swap status by payment_hash. Status: Waiting → Pending → Succeeded | Expired | Failed.',
-    { payment_hash: z.string() },
-    async ({ payment_hash }) => t(JSON.stringify(await maker.getAtomicSwapStatus({ payment_hash }), null, 2)))
+    {
+      payment_hash: z.string(),
+      access_token: z.string().optional().describe('Per-swap token from kaleidoswap_atomic_init; required once the maker enforces it'),
+    },
+    async ({ payment_hash, access_token }) => t(JSON.stringify(await maker.getAtomicSwapStatus({ payment_hash, access_token: access_token ?? '' }), null, 2)))
 
   // -----------------------------------------------------------------------
   server.tool('kaleidoswap_lsp_get_info',
