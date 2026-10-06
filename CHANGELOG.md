@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor bumps may break).
 
+## [Unreleased]
+
+### Fixed
+
+- `wdk_issue_asset` / `rln_issue_asset` no longer echo a `ticker` for CFA assets, which have none.
+- `wdk_list_transfers` / `rln_list_transfers`: `amount_raw` was taken from the first assignment, which
+  for a send can be our own change. It is now the requested amount, or the sum received/issued, and
+  `null` for sends. A new `assignments_raw` field lists every assignment value.
+
 ## [0.3.1] - 2026-10-06
 
 ### Changed
