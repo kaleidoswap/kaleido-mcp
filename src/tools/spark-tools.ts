@@ -300,7 +300,7 @@ export function registerSparkTools(server: WdkMcpServer, usdtToken?: string): vo
   // -----------------------------------------------------------------------
   server.tool(
     'spark_create_tokens_invoice',
-    'Create a Spark invoice (spark1... encoded address) to receive tokens (e.g. USDT) from another Spark wallet. Use as the receiver_address for KaleidoSwap REST orders delivering tokens on Spark.',
+    'Create a Spark invoice (spark1... encoded address) to receive tokens (e.g. USDT) from another Spark wallet.',
     {
       token: z.string().optional().describe('Spark token identifier (btkn1...). Omit to use configured USDT token.'),
       amount: z.string().optional().describe('Amount in base token units as a string integer (e.g. "1000000" for 1 USDT). Omit for open invoice.'),
@@ -332,7 +332,7 @@ export function registerSparkTools(server: WdkMcpServer, usdtToken?: string): vo
   // -----------------------------------------------------------------------
   server.tool(
     'spark_pay_spark_invoice',
-    'Pay one or more Spark invoices (spark1... encoded addresses) from the Spark L2 wallet. This is required to fulfill KaleidoSwap REST orders with BTC_SPARK source layer — when the deposit_address_format is SPARK_INVOICE, use this tool (not spark_send_sats, which only works with regular Spark addresses).',
+    'Pay one or more Spark invoices (spark1... encoded addresses) from the Spark L2 wallet. Use this tool for spark1... invoices (not spark_send_sats, which only works with regular Spark addresses).',
     {
       invoices: z.array(z.object({
         invoice: z.string().describe('Spark invoice to pay (spark1... encoded)'),

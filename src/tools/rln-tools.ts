@@ -17,7 +17,7 @@ const toFungibleAssignment = (
   { type: 'Fungible' as never, value }
 )
 
-export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
+export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTransportEndpoints: string[] = []): void {
   const registerAliases = (
     names: string[],
     description: string,
@@ -94,12 +94,12 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
   // -----------------------------------------------------------------------
   registerAliases(
     ['wdk_create_rgb_invoice', 'rln_create_rgb_invoice'],
-    'Create an RGB invoice to receive an RGB asset (USDT, XAUT). Pass the invoice as receiver_address with format=RGB_INVOICE when settling a swap.',
+    'Create an RGB invoice to receive an RGB asset (USDT, XAUT) on-chain. Share the invoice with the sender; they pay it with wdk_send_asset using the returned recipient_id.',
     {
       asset_id: z.string().optional().describe('RGB asset ID. Omit for any asset.'),
       amount: z.number().positive().optional().describe('Expected amount in display units (e.g. 65.5 for 65.5 USDT)'),
       duration_seconds: z.number().int().positive().optional().describe('Invoice expiry (default: 86400 = 24h)'),
-      transport_endpoints: z.array(z.string()).optional().describe('RGB proxy endpoints the payer fetches the consignment from'),
+      transport_endpoints: z.array(z.string()).optional().describe('RGB proxy endpoints the payer posts the consignment to. Defaults to the network RGB proxy (RGB_PROXY_ENDPOINT).'),
     },
     async ({ asset_id, amount, duration_seconds, transport_endpoints }: { asset_id?: string; amount?: number; duration_seconds?: number; transport_endpoints?: string[] }) => {
       const invoice = await rln.createRgbInvoice({
@@ -108,7 +108,7 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
         // kaleido-sdk 0.1.8 replaced duration_seconds with an absolute expiry timestamp.
         expiration_timestamp: Math.floor(Date.now() / 1000) + (duration_seconds ?? 86400),
         // Required since kaleido-sdk 0.1.15 (RLN 0.8.0).
-        transport_endpoints: transport_endpoints ?? [],
+        transport_endpoints: transport_endpoints?.length ? transport_endpoints : defaultTransportEndpoints,
         min_confirmations: 1,
         witness: false,
       })
@@ -116,7 +116,6 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
         invoice: invoice.invoice,
         recipient_id: invoice.recipient_id,
         expires_at: invoice.expiration_timestamp ? new Date(invoice.expiration_timestamp * 1000).toISOString() : null,
-        usage: 'Pass invoice as receiver_address with receiver_address_format="RGB_INVOICE"',
       }, null, 2))
     },
   )
@@ -163,12 +162,12 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
   // -----------------------------------------------------------------------
   registerAliases(
     ['wdk_send_asset', 'rln_send_asset'],
-    'Send an RGB asset (USDT/XAUT) on-chain. Pass deposit_address.address from a KaleidoSwap RGB_INVOICE order as recipient_id.',
+    'Send an RGB asset (USDT/XAUT) on-chain. Pass the recipient_id from the receiver RGB invoice (wdk_create_rgb_invoice on their side).',
     {
       asset_id: z.string().describe('RGB asset ID'),
       recipient_id: z.string().describe('Recipient identifier from an RGB invoice'),
       amount: z.number().positive().describe('Amount in display units (e.g. 65.5 for USDT)'),
-      transport_endpoints: z.array(z.string()).optional(),
+      transport_endpoints: z.array(z.string()).optional().describe('RGB proxy endpoints from the receiver invoice. Defaults to the network RGB proxy (RGB_PROXY_ENDPOINT).'),
       fee_rate: z.number().positive().optional(),
     },
     async ({
@@ -198,7 +197,7 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
           [asset_id]: [{
             recipient_id,
             assignment: toFungibleAssignment(rawAmount),
-            transport_endpoints: transport_endpoints ?? [],
+            transport_endpoints: transport_endpoints?.length ? transport_endpoints : defaultTransportEndpoints,
           }],
         },
         // kaleido-sdk 0.1.8 dropped skip_sync from SendRgbRequest.
@@ -342,7 +341,7 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
   // -----------------------------------------------------------------------
   registerAliases(
     ['wdk_refresh_transfers', 'rln_refresh_transfers'],
-    'Refresh pending RGB asset transfers on the RLN node. Call after a KaleidoSwap order is FILLED to sync balances.',
+    'Refresh pending RGB asset transfers on the RLN node. Call after an incoming RGB transfer or a settled swap to sync balances.',
     { skip_sync: z.boolean().optional() },
     async ({ skip_sync = false }: { skip_sync?: boolean }) => {
       // kaleido-sdk 0.1.11 (RLN 0.7.1) made `filter` required; [] refreshes all.
