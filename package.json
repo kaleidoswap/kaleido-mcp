@@ -42,19 +42,25 @@
     "test": "npm run test:contract"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.10.1",
-    "@tetherto/wdk": "^1.0.0-beta.5",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@tetherto/wdk": "^1.0.0-beta.18",
     "@tetherto/wdk-mcp-toolkit": "github:tetherto/wdk-mcp-toolkit",
-    "@tetherto/wdk-wallet-spark": "^1.0.0-beta.11",
+    "@tetherto/wdk-wallet-spark": "^1.0.0-beta.28",
     "kaleido-sdk": "^0.1.18",
-    "zod": "^3.24.2"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/node": "^22.13.14",
-    "tsx": "^4.19.3",
-    "typescript": "^5.8.2"
+    "@types/node": "^26.6.4",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
   },
   "engines": {
     "node": ">=20"
+  },
+  "overrides": {
+    "@tetherto/wdk-mcp-toolkit": {
+      "@modelcontextprotocol/sdk": "$@modelcontextprotocol/sdk",
+      "zod": "$zod"
+    }
   }
 }
