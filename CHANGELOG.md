@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor bumps may break).
 
+## [0.3.1] - 2026-10-06
+
+### Changed
+
+- `KALEIDO_NETWORK` now defaults to `signet`, the only network with a public KaleidoSwap API.
+  `npx -y kaleido-mcp` with no configuration talks to `https://api.signet.kaleidoswap.com`.
+- `KALEIDO_NETWORK=mainnet` no longer has a default KaleidoSwap API URL: set `KALEIDOSWAP_API_URL`
+  (or `KALEIDO_API_URL`) or the server exits at startup with an error naming the variable. Spark and
+  Liquid mainnet presets are unchanged.
+- `@tetherto/wdk-wallet-spark` and `@kaleidorg/wdk-wallet-liquid` are now optional peer dependencies
+  and are no longer installed with kaleido-mcp. A clean install drops from about 620 MB / 337 packages
+  to about 290 MB / 257 packages; most of the remainder is the WDK MCP toolkit's runtime. To use the Spark or Liquid tools, install the package next to
+  kaleido-mcp, e.g. `npx -y -p kaleido-mcp -p @tetherto/wdk-wallet-spark kaleido-mcp`. When a seed is
+  set but the package is missing, the server starts without those tools and logs which package to
+  install. The Docker image still ships both.
+- Dropped the unused direct dependency on `@tetherto/wdk`.
+- The Docker image no longer sets `KALEIDOSWAP_API_URL`; it follows `KALEIDO_NETWORK` like the npm package.
+
 ## [0.3.0] - 2026-10-06
 
 ### Breaking

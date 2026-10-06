@@ -8,14 +8,17 @@ RUN apt-get update \
 COPY package.json package-lock.json ./
 RUN npm install --ignore-scripts
 COPY . .
-RUN npm run build && npm prune --omit=dev
+# Spark and Liquid are optional peers (devDependencies here); promote them to dependencies so the
+# image ships every wallet, then drop the build tooling.
+RUN npm run build \
+  && node -e "const fs=require('fs');const p=require('./package.json');for(const n of Object.keys(p.peerDependencies)){p.dependencies[n]=p.devDependencies[n];delete p.devDependencies[n]}fs.writeFileSync('package.json',JSON.stringify(p,null,2))" \
+  && npm install --omit=dev --ignore-scripts --no-audit --no-fund
 
 FROM node:20-bookworm-slim
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=3013
-ENV KALEIDOSWAP_API_URL=https://api.staging.kaleidoswap.com
 
 COPY --from=builder /workspace/dist ./dist/
 COPY --from=builder /workspace/package.json ./

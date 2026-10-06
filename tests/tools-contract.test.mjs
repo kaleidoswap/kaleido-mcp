@@ -57,7 +57,7 @@ test('kaleido-mcp includes the canonical focused-server contracts and legacy ali
       WDK_SEED: TEST_MNEMONIC,
       SPARK_NETWORK: 'REGTEST',
       RLN_NODE_URL: 'http://localhost:3001',
-      KALEIDOSWAP_API_URL: 'https://api.kaleidoswap.com',
+      KALEIDOSWAP_API_URL: 'https://maker.example.com',
     },
   })
 
@@ -187,6 +187,36 @@ test('an unknown KALEIDO_NETWORK fails fast', async () => {
 
   assert.equal(res.status, 1)
   assert.match(res.stderr, /KALEIDO_NETWORK must be one of/)
+})
+
+test('mainnet without a KaleidoSwap API URL fails fast', async () => {
+  const { spawnSync } = await import('node:child_process')
+  const res = spawnSync(process.execPath, ['dist/index.js'], {
+    cwd,
+    env: { PATH: process.env.PATH ?? '', KALEIDO_NETWORK: 'mainnet' },
+    input: '',
+    encoding: 'utf8',
+  })
+
+  assert.equal(res.status, 1)
+  assert.match(res.stderr, /KALEIDOSWAP_API_URL/)
+})
+
+test('the default network is signet', async () => {
+  const { spawn } = await import('node:child_process')
+  const child = spawn(process.execPath, ['dist/index.js'], { cwd, env: { PATH: process.env.PATH ?? '' } })
+  let stderr = ''
+  await new Promise(resolve => {
+    child.stderr.on('data', c => {
+      stderr += c
+      if (stderr.includes('stdio connected')) resolve()
+    })
+    child.on('exit', resolve)
+  })
+  child.kill()
+
+  assert.match(stderr, /network: signet/)
+  assert.match(stderr, /KaleidoSwap\(https:\/\/api\.signet\.kaleidoswap\.com\)/)
 })
 
 test('RGB invoices default to the network RGB proxy and honour an explicit override', async () => {
