@@ -17,7 +17,7 @@ const toFungibleAssignment = (
   { type: 'Fungible' as never, value }
 )
 
-export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
+export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTransportEndpoints: string[] = []): void {
   const registerAliases = (
     names: string[],
     description: string,
@@ -94,12 +94,12 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
   // -----------------------------------------------------------------------
   registerAliases(
     ['wdk_create_rgb_invoice', 'rln_create_rgb_invoice'],
-    'Create an RGB invoice to receive an RGB asset (USDT, XAUT). Pass the invoice as receiver_address with format=RGB_INVOICE when settling a swap.',
+    'Create an RGB invoice to receive an RGB asset (USDT, XAUT) on-chain. Share the invoice with the sender; they pay it with wdk_send_asset using the returned recipient_id.',
     {
       asset_id: z.string().optional().describe('RGB asset ID. Omit for any asset.'),
       amount: z.number().positive().optional().describe('Expected amount in display units (e.g. 65.5 for 65.5 USDT)'),
       duration_seconds: z.number().int().positive().optional().describe('Invoice expiry (default: 86400 = 24h)'),
-      transport_endpoints: z.array(z.string()).optional().describe('RGB proxy endpoints the payer fetches the consignment from'),
+      transport_endpoints: z.array(z.string()).optional().describe('RGB proxy endpoints the payer posts the consignment to. Defaults to the network RGB proxy (RGB_PROXY_ENDPOINT).'),
     },
     async ({ asset_id, amount, duration_seconds, transport_endpoints }: { asset_id?: string; amount?: number; duration_seconds?: number; transport_endpoints?: string[] }) => {
       const invoice = await rln.createRgbInvoice({
@@ -108,7 +108,7 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
         // kaleido-sdk 0.1.8 replaced duration_seconds with an absolute expiry timestamp.
         expiration_timestamp: Math.floor(Date.now() / 1000) + (duration_seconds ?? 86400),
         // Required since kaleido-sdk 0.1.15 (RLN 0.8.0).
-        transport_endpoints: transport_endpoints ?? [],
+        transport_endpoints: transport_endpoints?.length ? transport_endpoints : defaultTransportEndpoints,
         min_confirmations: 1,
         witness: false,
       })
@@ -116,7 +116,6 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
         invoice: invoice.invoice,
         recipient_id: invoice.recipient_id,
         expires_at: invoice.expiration_timestamp ? new Date(invoice.expiration_timestamp * 1000).toISOString() : null,
-        usage: 'Pass invoice as receiver_address with receiver_address_format="RGB_INVOICE"',
       }, null, 2))
     },
   )
@@ -127,14 +126,17 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
     'Create a BOLT11 Lightning invoice to receive BTC via Lightning Network into the RLN node.',
     {
       amount_sats: z.number().int().positive().optional().describe('Amount in satoshis. Omit for any-amount.'),
+      amount_msat: z.number().int().positive().optional().describe('Amount in millisatoshis, instead of amount_sats'),
       description: z.string().optional(),
       expiry_sec: z.number().int().positive().optional().describe('Expiry in seconds (default: 3600)'),
     },
-    async ({ amount_sats, description, expiry_sec }: { amount_sats?: number; description?: string; expiry_sec?: number }) =>
-      t(JSON.stringify(await rln.createLNInvoice({
-        amt_msat: amount_sats === undefined ? undefined : amount_sats * 1000,
+    async ({ amount_sats, amount_msat, expiry_sec }: { amount_sats?: number; amount_msat?: number; description?: string; expiry_sec?: number }) => {
+      if (amount_sats !== undefined && amount_msat !== undefined) return fail('pass amount_sats or amount_msat, not both')
+      return t(JSON.stringify(await rln.createLNInvoice({
+        amt_msat: amount_sats !== undefined ? amount_sats * 1000 : amount_msat,
         expiry_sec: expiry_sec ?? 3600,
-      }), null, 2)),
+      }), null, 2))
+    },
   )
 
   // -----------------------------------------------------------------------
@@ -163,12 +165,12 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
   // -----------------------------------------------------------------------
   registerAliases(
     ['wdk_send_asset', 'rln_send_asset'],
-    'Send an RGB asset (USDT/XAUT) on-chain. Pass deposit_address.address from a KaleidoSwap RGB_INVOICE order as recipient_id.',
+    'Send an RGB asset (USDT/XAUT) on-chain. Pass the recipient_id from the receiver RGB invoice (wdk_create_rgb_invoice on their side).',
     {
       asset_id: z.string().describe('RGB asset ID'),
       recipient_id: z.string().describe('Recipient identifier from an RGB invoice'),
       amount: z.number().positive().describe('Amount in display units (e.g. 65.5 for USDT)'),
-      transport_endpoints: z.array(z.string()).optional(),
+      transport_endpoints: z.array(z.string()).optional().describe('RGB proxy endpoints from the receiver invoice. Defaults to the network RGB proxy (RGB_PROXY_ENDPOINT).'),
       fee_rate: z.number().positive().optional(),
     },
     async ({
@@ -198,7 +200,7 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
           [asset_id]: [{
             recipient_id,
             assignment: toFungibleAssignment(rawAmount),
-            transport_endpoints: transport_endpoints ?? [],
+            transport_endpoints: transport_endpoints?.length ? transport_endpoints : defaultTransportEndpoints,
           }],
         },
         // kaleido-sdk 0.1.8 dropped skip_sync from SendRgbRequest.
@@ -342,12 +344,113 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
   // -----------------------------------------------------------------------
   registerAliases(
     ['wdk_refresh_transfers', 'rln_refresh_transfers'],
-    'Refresh pending RGB asset transfers on the RLN node. Call after a KaleidoSwap order is FILLED to sync balances.',
+    'Refresh pending RGB asset transfers on the RLN node. Call after an incoming RGB transfer or a settled swap to sync balances.',
     { skip_sync: z.boolean().optional() },
     async ({ skip_sync = false }: { skip_sync?: boolean }) => {
       // kaleido-sdk 0.1.11 (RLN 0.7.1) made `filter` required; [] refreshes all.
       await rln.refreshTransfers({ skip_sync, filter: [] })
       return t(JSON.stringify({ refreshed: true }, null, 2))
+    },
+  )
+
+  // -----------------------------------------------------------------------
+  registerAliases(
+    ['wdk_create_utxos', 'rln_create_utxos'],
+    'Create colorable UTXOs on the node. RGB issuance, RGB invoices and asset channels each need free colored UTXOs; call this first on a fresh node or when an RGB call fails with "no available UTXOs". Spends a small amount of on-chain BTC.',
+    {
+      num: z.number().int().positive().optional().describe('Number of UTXOs to create (default: node decides, typically 5)'),
+      size: z.number().int().positive().optional().describe('Size of each UTXO in sats (default: node decides)'),
+      up_to: z.boolean().optional().describe('If true, only create enough UTXOs to reach `num` free ones (default: false)'),
+      fee_rate: z.number().positive().optional().describe('On-chain fee rate in sat/vbyte (default: 1)'),
+    },
+    async ({ num, size, up_to = false, fee_rate = 1 }: { num?: number; size?: number; up_to?: boolean; fee_rate?: number }) => {
+      await rln.createUtxos({ up_to, num, size, fee_rate, skip_sync: false })
+      return t(JSON.stringify({ created: true, note: 'Colored UTXOs are ready once the funding tx confirms' }, null, 2))
+    },
+  )
+
+  // -----------------------------------------------------------------------
+  registerAliases(
+    ['wdk_issue_asset', 'rln_issue_asset'],
+    'Issue a new RGB asset owned by this node. schema "NIA" = fungible token with a ticker (e.g. an event or loyalty token), "CFA" = fungible collectible without ticker, "UDA" = unique digital asset / NFT (supply 1). Requires free colored UTXOs (see wdk_create_utxos). Returns the new asset_id.',
+    {
+      schema: z.enum(['NIA', 'CFA', 'UDA']).optional().describe('Asset schema (default: NIA)'),
+      name: z.string().min(1).describe('Asset name, e.g. "Hackathon Ticket"'),
+      ticker: z.string().regex(/^[A-Z0-9]{1,8}$/).optional().describe('Uppercase ticker, e.g. "TICKET". Required for NIA and UDA, ignored for CFA.'),
+      amount: z.number().positive().optional().describe('Total supply in display units (e.g. 1000). Required for NIA and CFA; UDA always has supply 1.'),
+      precision: z.number().int().min(0).max(18).optional().describe('Decimal places (default: 0). Raw supply = amount × 10^precision.'),
+      details: z.string().optional().describe('Optional free-text description (CFA and UDA only)'),
+    },
+    async ({
+      schema = 'NIA',
+      name,
+      ticker,
+      amount,
+      precision = 0,
+      details,
+    }: {
+      schema?: 'NIA' | 'CFA' | 'UDA'
+      name: string
+      ticker?: string
+      amount?: number
+      precision?: number
+      details?: string
+    }) => {
+      if (schema !== 'CFA' && !ticker) return fail(`ticker is required for ${schema}`)
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let result: { asset?: any }
+      let rawAmount = 1
+      if (schema === 'UDA') {
+        result = await rln.issueAssetUDA({
+          ticker: ticker!,
+          name,
+          details: details ?? null,
+          precision,
+          media_file_digest: null,
+          attachments_file_digests: [],
+        })
+      } else {
+        if (amount === undefined) return fail(`amount is required for ${schema}`)
+        rawAmount = Math.round(amount * Math.pow(10, precision))
+        if (!Number.isSafeInteger(rawAmount) || rawAmount <= 0) {
+          return fail('amount × 10^precision must be a positive safe integer')
+        }
+        result = schema === 'NIA'
+          ? await rln.issueAssetNIA({ amounts: [rawAmount], ticker: ticker!, name, precision })
+          : await rln.issueAssetCFA({ amounts: [rawAmount], name, details: details ?? null, precision })
+      }
+
+      const asset = result.asset ?? {}
+      return t(JSON.stringify({
+        issued: true,
+        schema,
+        asset_id: asset.asset_id ?? null,
+        name: asset.name ?? name,
+        ticker: asset.ticker ?? ticker ?? null,
+        precision: asset.precision ?? precision,
+        issued_supply_raw: asset.issued_supply ?? rawAmount,
+      }, null, 2))
+    },
+  )
+
+  // -----------------------------------------------------------------------
+  registerAliases(
+    ['wdk_list_transfers', 'rln_list_transfers'],
+    'List RGB transfers for one asset (issuance, sends, receives) with their status (WaitingCounterparty, WaitingConfirmations, Settled, Failed). Use it to check whether an RGB invoice has been paid.',
+    { asset_id: z.string().describe('RGB asset ID') },
+    async ({ asset_id }: { asset_id: string }) => {
+      const { transfers } = await rln.listTransfers({ asset_id })
+      return t(JSON.stringify((transfers ?? []).map(tr => ({
+        idx: tr.idx,
+        kind: tr.kind,
+        status: tr.status,
+        amount_raw: assignmentValue(tr.requested_assignment) ?? assignmentValue(tr.assignments?.[0]) ?? null,
+        txid: tr.txid ?? null,
+        recipient_id: tr.recipient_id ?? null,
+        created_at: tr.created_at,
+        updated_at: tr.updated_at,
+      })), null, 2))
     },
   )
 
@@ -423,3 +526,6 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient): void {
 }
 
 const t = (content: string) => ({ content: [{ type: 'text' as const, text: content }] })
+const assignmentValue = (a: unknown): number | undefined =>
+  a && typeof a === 'object' && 'value' in a ? (a as { value: number }).value : undefined
+const fail = (message: string) => ({ ...t(JSON.stringify({ error: message }, null, 2)), isError: true })

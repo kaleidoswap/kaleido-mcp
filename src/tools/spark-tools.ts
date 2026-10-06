@@ -19,6 +19,16 @@ export function registerSparkTools(server: WdkMcpServer, usdtToken?: string): vo
     return wdk.getAccount('spark', 0)
   }
 
+  const registerAliases = (
+    names: string[],
+    description: string,
+    schema: Record<string, z.ZodTypeAny>,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    handler: any,
+  ) => {
+    for (const name of names) server.tool(name, description, schema, handler)
+  }
+
   // -----------------------------------------------------------------------
   server.tool(
     'spark_get_balance',
@@ -280,18 +290,32 @@ export function registerSparkTools(server: WdkMcpServer, usdtToken?: string): vo
     'Create a Spark invoice (spark1... encoded address) to receive BTC sats from another Spark wallet. Use as the receiver_address when placing a KaleidoSwap REST order with BTC_SPARK source layer (receiver_address_format: SPARK_INVOICE).',
     {
       amount_sats: z.number().int().positive().optional().describe('Amount in satoshis to receive. Omit for open (any-amount) invoice.'),
+      amount: z.number().int().positive().optional().describe('Alias of amount_sats'),
       memo: z.string().optional().describe('Optional description'),
+      sender_spark_address: z.string().optional().describe('Optional Spark address of the expected sender (restricts who can pay)'),
+      expiry_minutes: z.number().positive().optional().describe('Optional expiry in minutes from now'),
     },
-    async ({ amount_sats, memo }: { amount_sats?: number; memo?: string }) => {
+    async ({ amount_sats, amount, memo, sender_spark_address, expiry_minutes }: {
+      amount_sats?: number
+      amount?: number
+      memo?: string
+      sender_spark_address?: string
+      expiry_minutes?: number
+    }) => {
+      if (amount_sats !== undefined && amount !== undefined) return fail('pass amount_sats or amount, not both')
+      const sats = amount_sats ?? amount
       const account = await getAccount()
       const invoice = await account.createSparkSatsInvoice({
-        ...(amount_sats !== undefined ? { amount: amount_sats } : {}),
+        ...(sats !== undefined ? { amount: sats } : {}),
         ...(memo ? { memo } : {}),
+        ...invoiceRestrictions(sender_spark_address, expiry_minutes),
       })
       return t(JSON.stringify({
         spark_invoice: invoice,
-        amount_sats: amount_sats ?? null,
+        amount_sats: sats ?? null,
         memo: memo ?? null,
+        sender_spark_address: sender_spark_address ?? null,
+        expiry_minutes: expiry_minutes ?? null,
         note: 'Pay this Spark invoice from another Spark wallet to receive sats on Spark L2',
       }, null, 2))
     },
@@ -300,13 +324,21 @@ export function registerSparkTools(server: WdkMcpServer, usdtToken?: string): vo
   // -----------------------------------------------------------------------
   server.tool(
     'spark_create_tokens_invoice',
-    'Create a Spark invoice (spark1... encoded address) to receive tokens (e.g. USDT) from another Spark wallet. Use as the receiver_address for KaleidoSwap REST orders delivering tokens on Spark.',
+    'Create a Spark invoice (spark1... encoded address) to receive tokens (e.g. USDT) from another Spark wallet.',
     {
       token: z.string().optional().describe('Spark token identifier (btkn1...). Omit to use configured USDT token.'),
       amount: z.string().optional().describe('Amount in base token units as a string integer (e.g. "1000000" for 1 USDT). Omit for open invoice.'),
       memo: z.string().optional().describe('Optional description'),
+      sender_spark_address: z.string().optional().describe('Optional Spark address of the expected sender (restricts who can pay)'),
+      expiry_minutes: z.number().positive().optional().describe('Optional expiry in minutes from now'),
     },
-    async ({ token, amount, memo }: { token?: string; amount?: string; memo?: string }) => {
+    async ({ token, amount, memo, sender_spark_address, expiry_minutes }: {
+      token?: string
+      amount?: string
+      memo?: string
+      sender_spark_address?: string
+      expiry_minutes?: number
+    }) => {
       const tokenAddr = token ?? usdtToken
       if (!tokenAddr) {
         return t(JSON.stringify({
@@ -318,57 +350,63 @@ export function registerSparkTools(server: WdkMcpServer, usdtToken?: string): vo
         tokenIdentifier: tokenAddr,
         ...(amount !== undefined ? { amount: BigInt(amount) } : {}),
         ...(memo ? { memo } : {}),
+        ...invoiceRestrictions(sender_spark_address, expiry_minutes),
       })
       return t(JSON.stringify({
         spark_invoice: invoice,
         token: tokenAddr,
         amount: amount ?? null,
         memo: memo ?? null,
+        sender_spark_address: sender_spark_address ?? null,
+        expiry_minutes: expiry_minutes ?? null,
         note: 'Pay this Spark invoice from another Spark wallet to receive tokens on Spark L2',
       }, null, 2))
     },
   )
 
   // -----------------------------------------------------------------------
-  server.tool(
-    'spark_pay_spark_invoice',
-    'Pay one or more Spark invoices (spark1... encoded addresses) from the Spark L2 wallet. This is required to fulfill KaleidoSwap REST orders with BTC_SPARK source layer — when the deposit_address_format is SPARK_INVOICE, use this tool (not spark_send_sats, which only works with regular Spark addresses).',
+  registerAliases(
+    ['spark_pay_invoice', 'spark_pay_spark_invoice'],
+    'Pay one or more Spark invoices (spark1... encoded addresses) from the Spark L2 wallet, e.g. KaleidoSwap BTC_SPARK swap deposits. Spark invoices are NOT BOLT11: use spark_pay_lightning_invoice for those, and spark_send_sats for plain Spark addresses.',
     {
       invoices: z.array(z.object({
         invoice: z.string().describe('Spark invoice to pay (spark1... encoded)'),
-        amount_sats: z.number().int().positive().optional().describe('Amount override in satoshis — required for open (amount-less) invoices'),
-        amount_tokens: z.string().optional().describe('Amount override in base token units as a string integer — for token invoices without encoded amount'),
+        amount: z.string().optional().describe('Amount override as a string integer (sats, or base token units for token invoices) — required for open (amount-less) invoices'),
+        amount_sats: z.number().int().positive().optional().describe('Amount override in satoshis, instead of amount'),
+        amount_tokens: z.string().optional().describe('Amount override in base token units as a string integer, instead of amount'),
       })).min(1).describe('List of Spark invoices to pay'),
     },
-    async ({ invoices }: { invoices: { invoice: string; amount_sats?: number; amount_tokens?: string }[] }) => {
+    async ({ invoices }: { invoices: { invoice: string; amount?: string; amount_sats?: number; amount_tokens?: string }[] }) => {
+      const sparkInvoices: { invoice: string; amount?: bigint }[] = []
+      for (const i of invoices) {
+        const given = [i.amount, i.amount_sats, i.amount_tokens].filter(v => v !== undefined)
+        if (given.length > 1) return fail(`${i.invoice}: pass only one of amount, amount_sats, amount_tokens`)
+        sparkInvoices.push({ invoice: i.invoice, ...(given.length ? { amount: BigInt(given[0]!) } : {}) })
+      }
       const account = await getAccount()
-      // Build the invoice array — use amount_tokens if present, then amount_sats, otherwise no override
-      const sparkInvoices = invoices.map(i => {
-        const entry: { invoice: string; amount?: bigint } = { invoice: i.invoice }
-        if (i.amount_tokens !== undefined) entry.amount = BigInt(i.amount_tokens)
-        else if (i.amount_sats !== undefined) entry.amount = BigInt(i.amount_sats)
-        return entry
-      })
       const result = await account.paySparkInvoice(sparkInvoices)
       return t(JSON.stringify({
-        result,
-        paid_count: invoices.length,
-        note: 'Spark invoice(s) fulfilled',
-      }, null, 2))
+        sats_transactions: result?.satsTransactions ?? [],
+        sats_transaction_errors: result?.satsTransactionErrors ?? [],
+        token_transactions: result?.tokenTransactions ?? [],
+        token_transaction_errors: result?.tokenTransactionErrors ?? [],
+        invalid_invoices: result?.invalidInvoices ?? [],
+        note: 'Spark invoice(s) submitted — check the error arrays for any failures',
+      }, (_k, v) => (typeof v === 'bigint' ? v.toString() : v), 2))
     },
   )
 
   // -----------------------------------------------------------------------
-  server.tool(
-    'spark_get_spark_invoices',
+  registerAliases(
+    ['spark_get_invoices', 'spark_get_spark_invoices'],
     'Query the status of one or more Spark invoices (spark1... encoded addresses). Use to check if a Spark invoice has been paid.',
     {
       invoices: z.array(z.string()).min(1).describe('List of Spark invoice strings to query'),
     },
     async ({ invoices }: { invoices: string[] }) => {
       const account = await getAccount()
-      const result = await account.getSparkInvoices(invoices)
-      return t(JSON.stringify(result, null, 2))
+      const result = await account.getSparkInvoices({ invoices })
+      return t(JSON.stringify(result, (_k, v) => (typeof v === 'bigint' ? v.toString() : v), 2))
     },
   )
 
@@ -414,3 +452,9 @@ export function registerSparkTools(server: WdkMcpServer, usdtToken?: string): vo
 }
 
 const t = (content: string) => ({ content: [{ type: 'text' as const, text: content }] })
+const fail = (message: string) => ({ ...t(JSON.stringify({ error: message }, null, 2)), isError: true })
+
+const invoiceRestrictions = (senderSparkAddress?: string, expiryMinutes?: number) => ({
+  ...(senderSparkAddress ? { senderSparkAddress } : {}),
+  ...(expiryMinutes ? { expiryTime: new Date(Date.now() + expiryMinutes * 60_000) } : {}),
+})

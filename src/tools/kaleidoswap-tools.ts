@@ -1,5 +1,5 @@
 /**
- * KaleidoSwap DEX tools — quotes, REST orders, atomic HTLC swaps, LSPS1 channels.
+ * KaleidoSwap DEX tools — quotes, atomic HTLC swaps, LSPS1 channels.
  * Ported from kaleidoswap-mcp/src/server.ts and updated for the unified server.
  */
 import { z } from 'zod'
