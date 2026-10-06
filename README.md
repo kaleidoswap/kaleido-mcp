@@ -1,72 +1,223 @@
 # kaleido-mcp
 
-Unified MCP server for the Kaleidoswap stack.
+[![npm](https://img.shields.io/npm/v/kaleido-mcp)](https://www.npmjs.com/package/kaleido-mcp)
+[![CI](https://github.com/kaleidoswap/kaleido-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/kaleidoswap/kaleido-mcp/actions/workflows/ci.yml)
 
-This repo is the **composition layer** that exposes the focused MCP domains through one connection:
+One MCP server that gives an AI agent the whole KaleidoSwap stack over a single connection:
 
-- Spark wallet tools
-- RLN wallet tools
-- KaleidoSwap DEX tools
-- MPP / L402 payment-gated API tools
-- market data tools
-- node lifecycle tools (local Docker signet/regtest env management)
+- **KaleidoSwap DEX** — assets, pairs, quotes, atomic BTC ↔ RGB swaps, LSP channel purchases
+- **RGB Lightning Node (RLN)** — on-chain BTC, RGB assets, Lightning channels and payments
+- **Spark wallet** (optional, via WDK) — fee-free L2 transfers, Lightning pay/receive, BTC bridge
+- **MPP / L402** — pay for and consume payment-gated APIs, discover them on 402index.io
+- **Market data** — spot prices, OHLCV, Fear & Greed index
+- **Node lifecycle** — start, stop, init and unlock a local RLN through the `kaleido` CLI
 
-The canonical tool contracts mirror the focused servers:
+See [docs/TOOLS.md](docs/TOOLS.md) for every tool and its parameters.
 
-- `kaleidoswap_*`
-- `wdk_*`
-- `spark_*`
-- `mpp_*`
-- `l402_*`
-- `kaleido_node_*`
+> **Beta software.** Start on signet. Mainnet use is at your own risk.
 
-Legacy `rln_*` and generic `get_*` market aliases are still present for compatibility during migration.
+## Quickstart (signet)
 
-## Node lifecycle tools
-
-`kaleido_node_list/up/stop/down/ps/status/info/use/init/unlock/lock` shell out to a local `kaleido`
-CLI binary to spin Docker containers for a signet/regtest environment up and down, and manage RLN
-wallet unlock state. These were ported from the now-retired `kaleido-node-mcp` repo — everything else
-in that repo (wallet/asset/channel/payment/market/swap tools) duplicated the SDK-backed tools above
-and was dropped rather than ported.
-
-| Env var | Required | Description |
-| --- | --- | --- |
-| `KALEIDO_BIN` | no | Path to the `kaleido` CLI binary (default: auto-detect in common install paths, else `PATH`) |
-| `KALEIDO_NODE_URL` | no | RLN node URL override passed to the CLI |
-| `KALEIDO_API_URL` | no | KaleidoSwap API URL override passed to the CLI |
-| `KALEIDO_ENV_NAME` | no | Default environment name for `up`/`stop`/`down`/`ps` when not passed explicitly |
-
-## Required Environment
-
-| Env var | Required | Description |
-| --- | --- | --- |
-| `WDK_SEED` | yes | BIP-39 mnemonic for the Spark wallet |
-| `SPARK_NETWORK` | no | `MAINNET` or `REGTEST` |
-| `SPARK_SCAN_API_KEY` | no | SparkScan API key |
-| `SPARK_USDT_TOKEN` | no | Default Spark token identifier |
-| `RLN_NODE_URL` | no | RLN daemon URL, default `http://localhost:3001` |
-| `KALEIDOSWAP_API_URL` | no | KaleidoSwap API URL, default `https://api.kaleidoswap.com` |
-| `PORT` | no | Enable Streamable HTTP transport |
-| `MCP_AUTH_TOKEN` | no | Bearer token for HTTP mode |
-
-## Installation
+Requires Node.js 20 or newer.
 
 ```bash
-npm install
+KALEIDO_NETWORK=signet npx -y kaleido-mcp
+```
+
+The server speaks MCP over stdio and logs to stderr. With no other configuration you get the
+KaleidoSwap market tools (assets, pairs, quotes), MPP/L402 and market data tools straight away.
+Wallet and swap tools need an RGB Lightning Node (see [Running a signet node](#running-a-signet-rgb-lightning-node))
+and, for Spark, a `WDK_SEED`.
+
+### Claude Code
+
+```bash
+claude mcp add kaleido -e KALEIDO_NETWORK=signet -- npx -y kaleido-mcp
+```
+
+or in a project `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "kaleido": {
+      "command": "npx",
+      "args": ["-y", "kaleido-mcp"],
+      "env": {
+        "KALEIDO_NETWORK": "signet",
+        "RLN_NODE_URL": "http://localhost:3001"
+      }
+    }
+  }
+}
+```
+
+### Claude Desktop
+
+Add to `claude_desktop_config.json` (Settings → Developer → Edit Config):
+
+```json
+{
+  "mcpServers": {
+    "kaleido-signet": {
+      "command": "npx",
+      "args": ["-y", "kaleido-mcp"],
+      "env": {
+        "KALEIDO_NETWORK": "signet",
+        "RLN_NODE_URL": "http://localhost:3001"
+      }
+    }
+  }
+}
+```
+
+Mainnet:
+
+```json
+{
+  "mcpServers": {
+    "kaleido": {
+      "command": "npx",
+      "args": ["-y", "kaleido-mcp"],
+      "env": {
+        "KALEIDO_NETWORK": "mainnet",
+        "RLN_NODE_URL": "http://localhost:3001",
+        "WDK_SEED": "word1 word2 ... word12"
+      }
+    }
+  }
+}
+```
+
+Any other MCP client works the same way: run `npx -y kaleido-mcp` as a stdio server, or set `PORT`
+for Streamable HTTP.
+
+### Try it
+
+Once connected, ask the agent something like:
+
+- "List the assets and pairs on KaleidoSwap."
+- "Quote 0.002 BTC to USDT."
+- "What is my RLN node's pubkey and BTC balance?"
+- "Create an RGB invoice to receive 10 USDT."
+
+## Networks
+
+`KALEIDO_NETWORK` picks a preset. Any variable you set explicitly overrides the preset.
+
+| `KALEIDO_NETWORK` | KaleidoSwap API | `SPARK_NETWORK` | RGB proxy | RLN node |
+| --- | --- | --- | --- | --- |
+| `mainnet` (default) | `https://api.kaleidoswap.com` | `MAINNET` | none | `http://localhost:3001` |
+| `signet` | `https://api.signet.kaleidoswap.com` | `REGTEST` | `rpcs://proxy.iriswallet.com/0.2/json-rpc` | `http://localhost:3001` |
+
+The KaleidoSwap signet deployment runs on Mutinynet, the same network a `kaleido setup` node joins.
+Spark has no signet; its public test network is `REGTEST`, which is what the signet preset selects.
+The active network is printed to stderr at startup.
+
+## Environment variables
+
+All variables are optional. Empty values are treated as unset.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `KALEIDO_NETWORK` | `mainnet` | `mainnet` or `signet`; sets the defaults in the table above |
+| `KALEIDOSWAP_API_URL` | per network | KaleidoSwap API base URL (no path suffix) |
+| `KALEIDO_API_URL` | — | Alias for `KALEIDOSWAP_API_URL`; also passed to the `kaleido` CLI as `--api-url` |
+| `RLN_NODE_URL` | `http://localhost:3001` | RGB Lightning Node HTTP API used by the `wdk_*` and swap tools |
+| `RGB_PROXY_ENDPOINT` | per network | RGB proxy used by `wdk_create_rgb_invoice` / `wdk_send_asset` when no `transport_endpoints` are passed |
+| `WDK_SEED` | — | BIP-39 mnemonic. Enables the Spark and WDK wallet tools; without it they are not loaded at all |
+| `SPARK_NETWORK` | per network | `MAINNET` or `REGTEST` |
+| `SPARK_SCAN_API_KEY` | — | SparkScan API key |
+| `SPARK_USDT_TOKEN` | — | Default Spark token identifier (`btkn1...`) for token tools |
+| `KALEIDO_BIN` | auto-detect | Path to the `kaleido` CLI used by `kaleido_node_*` tools |
+| `KALEIDO_NODE_URL` | — | Passed to the `kaleido` CLI as `--node-url` |
+| `KALEIDO_ENV_NAME` | — | Default environment for `kaleido_node_up/stop/down/ps` |
+| `PORT` | — | Serve Streamable HTTP on this port instead of stdio (`GET /health` for probes) |
+| `MCP_AUTH_TOKEN` | — | Require `Authorization: Bearer <token>` in HTTP mode |
+
+## Tools
+
+55 tools (plus 25 legacy aliases) are always available; `WDK_SEED` adds 30 Spark and WDK wallet
+tools. The full, generated list with parameters is in [docs/TOOLS.md](docs/TOOLS.md) (regenerate with `npm run docs:tools`).
+
+| Group | Prefix | Highlights |
+| --- | --- | --- |
+| KaleidoSwap DEX | `kaleidoswap_` | `get_assets`, `get_pairs`, `get_quote`, `atomic_init/execute/status`, `lsp_*` |
+| RGB Lightning Node | `wdk_` | balances, RGB assets and invoices, channels, payments, `atomic_taker` |
+| Spark wallet | `spark_` | balance, Lightning invoices, deposits/withdrawals, token transfers (needs `WDK_SEED`) |
+| WDK built-ins | camelCase | `getAddress`, `getBalance`, `transfer`, `sign`, `getCurrentPrice`, ... (needs `WDK_SEED`) |
+| Node lifecycle | `kaleido_node_` | `up`, `stop`, `down`, `init`, `unlock`, `lock`, `status`, ... |
+| Paid APIs | `mpp_`, `l402_`, `search_paid_apis` | challenge, pay, submit credential, discover |
+| Market data | `l402_get_` | `price`, `market_data`, `ohlcv`, `sentiment` |
+
+`rln_*` and bare `get_*` names are legacy aliases of the `wdk_*` and `l402_get_*` tools.
+
+### Atomic swap flow
+
+1. `kaleidoswap_get_quote` — returns an `rfq_id` valid for about a minute
+2. `kaleidoswap_atomic_init` — returns `swapstring`, `payment_hash` and an `access_token`
+3. `wdk_atomic_taker` — whitelists the swap HTLC on your node
+4. `kaleidoswap_atomic_execute` — with your node pubkey from `wdk_get_node_info`
+5. `kaleidoswap_atomic_status` — poll until `Succeeded`
+
+The swap needs a Lightning channel with the KaleidoSwap node that can carry the asset you receive.
+`kaleidoswap_lsp_quote_asset_channel` and `kaleidoswap_lsp_create_asset_channel` buy one.
+
+## RGB
+
+RGB assets (such as USDT and XAUT) live on the RGB Lightning Node, so every RGB operation goes
+through the `wdk_*` tools and needs `RLN_NODE_URL` to point at an unlocked node:
+
+| Operation | Tool |
+| --- | --- |
+| List RGB assets held (NIA, UDA, CFA) | `wdk_list_assets` |
+| Balance of one asset (settled, future, spendable, off-chain) | `wdk_get_asset_balance` |
+| Receive an asset on-chain | `wdk_create_rgb_invoice` |
+| Send an asset on-chain | `wdk_send_asset` |
+| Sync pending transfers | `wdk_refresh_transfers` |
+| Open a channel that carries an asset | `wdk_open_channel` with `asset_id` and `asset_amount` |
+| See asset allocations per channel | `wdk_list_channels` |
+| Swap BTC ↔ RGB over Lightning | atomic flow above (`RGB_LN` layer) |
+| Buy a channel pre-loaded with an asset | `kaleidoswap_lsp_quote_asset_channel`, `kaleidoswap_lsp_create_asset_channel` |
+
+`wdk_create_rgb_invoice` and `wdk_send_asset` use the network's RGB proxy (the same one the
+`kaleido` CLI uses) unless you pass `transport_endpoints` or set `RGB_PROXY_ENDPOINT`. On mainnet there
+is no default, so set one.
+
+Receiving RGB on-chain needs free colored UTXOs on the node: fund it via `wdk_get_address`, then run
+`kaleido wallet create-utxos`.
+
+## Running a signet RGB Lightning Node
+
+The [`kaleido` CLI](https://github.com/kaleidoswap/kaleido-cli) runs a Docker-based node on the
+KaleidoSwap signet (Mutinynet) and listens on `http://localhost:3001` by default, which matches
+`RLN_NODE_URL`'s default:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kaleidoswap/kaleido-cli/master/install.sh | sh
+kaleido setup          # creates and starts one node
+kaleido node init      # once, sets the wallet password
+kaleido node unlock    # after every restart
+```
+
+Get test coins from the faucet at <https://faucet.mutinynet.kaleidoswap.com>.
+
+Once the CLI is installed, the agent can manage the node itself through the `kaleido_node_*` tools
+(`kaleido_node_up`, `kaleido_node_unlock`, `kaleido_node_status`, ...).
+
+## Development
+
+```bash
+npm ci
 npm run build
+npm test             # contract tests, no network or secrets needed
+npm run docs:tools   # regenerate docs/TOOLS.md
+npm run dev          # run from source with tsx
 ```
 
-## Usage
+`kaleido-mcp` is a thin composition layer: domain logic belongs in
+[`kaleido-sdk`](https://github.com/kaleidoswap/kaleido-sdk) and the WDK packages, not here.
 
-```bash
-# stdio
-WDK_SEED="word1 word2 ..." node dist/index.js
+## License
 
-# HTTP
-PORT=3010 WDK_SEED="word1 word2 ..." node dist/index.js
-```
-
-## Repo Role
-
-`kaleido-mcp` is intended to stay thin. Domain logic should live in the focused MCP packages or shared libraries, not be reimplemented here.
+Apache-2.0
