@@ -1,6 +1,6 @@
 {
   "name": "kaleido-mcp",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Unified MCP server for KaleidoSwap — WDK Spark wallet, Liquid wallet, RLN node, KaleidoSwap DEX, MPP/L402 payments, and 402index discovery in a single server",
   "license": "Apache-2.0",
   "type": "module",
@@ -44,15 +44,26 @@
     "docs:tools": "npm run build && node scripts/gen-tools-doc.mjs"
   },
   "dependencies": {
-    "@kaleidorg/wdk-wallet-liquid": "^1.0.0-beta.9",
     "@modelcontextprotocol/sdk": "^1.32.1",
-    "@tetherto/wdk": "^1.0.0-beta.18",
     "@tetherto/wdk-mcp-toolkit": "github:tetherto/wdk-mcp-toolkit#a77a546d16bdcdacfb29d88afe208d02af10bbf0",
-    "@tetherto/wdk-wallet-spark": "^1.0.0-beta.28",
     "kaleido-sdk": "^0.1.18",
     "zod": "^4.6.5"
   },
+  "peerDependencies": {
+    "@kaleidorg/wdk-wallet-liquid": "^1.0.0-beta.9",
+    "@tetherto/wdk-wallet-spark": "^1.0.0-beta.28"
+  },
+  "peerDependenciesMeta": {
+    "@kaleidorg/wdk-wallet-liquid": {
+      "optional": true
+    },
+    "@tetherto/wdk-wallet-spark": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@kaleidorg/wdk-wallet-liquid": "^1.0.0-beta.9",
+    "@tetherto/wdk-wallet-spark": "^1.0.0-beta.28",
     "@types/node": "^26.6.4",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"

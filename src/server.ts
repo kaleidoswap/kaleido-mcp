@@ -86,6 +86,15 @@ export interface KaleidoMcpConfig {
   liquidEsploraUrl?: string
 }
 
+function optionalPeerMissing(error: unknown, pkg: string): boolean {
+  const e = error as { code?: string, message?: string }
+  return (e?.code === 'ERR_MODULE_NOT_FOUND' || e?.code === 'MODULE_NOT_FOUND') && !!e.message?.includes(pkg)
+}
+
+function installHint(pkg: string): string {
+  return `${pkg} is not installed. Install it next to kaleido-mcp (npm i ${pkg}), or run: npx -y -p kaleido-mcp -p ${pkg} kaleido-mcp`
+}
+
 export const VERSION: string = createRequire(import.meta.url)('../package.json').version
 
 export async function createServer(config: KaleidoMcpConfig): Promise<WdkMcpServer> {
@@ -118,7 +127,8 @@ export async function createServer(config: KaleidoMcpConfig): Promise<WdkMcpServ
       // -----------------------------------------------------------------------
       registerSparkTools(server, config.sparkUsdtToken)
     } catch (error) {
-      process.stderr.write(`[kaleido-mcp] Spark tools disabled (failed to initialise): ${error}\n`)
+      const reason = optionalPeerMissing(error, '@tetherto/wdk-wallet-spark') ? installHint('@tetherto/wdk-wallet-spark') : `failed to initialise: ${error}`
+      process.stderr.write(`[kaleido-mcp] Spark tools disabled (${reason})\n`)
     }
   } else {
     process.stderr.write('[kaleido-mcp] Spark tools disabled (WDK_SEED not set)\n')
@@ -134,7 +144,8 @@ export async function createServer(config: KaleidoMcpConfig): Promise<WdkMcpServ
         ...(config.liquidEsploraUrl ? { esploraUrl: config.liquidEsploraUrl } : {}),
       }))
     } catch (error) {
-      process.stderr.write(`[kaleido-mcp] Liquid tools disabled (failed to initialise): ${error}\n`)
+      const reason = optionalPeerMissing(error, '@kaleidorg/wdk-wallet-liquid') ? installHint('@kaleidorg/wdk-wallet-liquid') : `failed to initialise: ${error}`
+      process.stderr.write(`[kaleido-mcp] Liquid tools disabled (${reason})\n`)
     }
   } else {
     process.stderr.write('[kaleido-mcp] Liquid tools disabled (LIQUID_MNEMONIC / WDK_SEED not set)\n')

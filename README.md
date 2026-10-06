@@ -25,18 +25,30 @@ kaleido-mcp supersedes the standalone `wdk-wallet-mcp` (RLN), `wdk-wallet-spark-
 Requires Node.js 20 or newer.
 
 ```bash
-KALEIDO_NETWORK=signet npx -y kaleido-mcp
+npx -y kaleido-mcp
 ```
 
-The server speaks MCP over stdio and logs to stderr. With no other configuration you get the
-KaleidoSwap market tools (assets, pairs, quotes), MPP/L402 and market data tools straight away.
-Wallet and swap tools need an RGB Lightning Node (see [Running a signet node](#running-a-signet-rgb-lightning-node))
-and, for the Spark and Liquid wallets, a `WDK_SEED`.
+The server speaks MCP over stdio, logs to stderr and defaults to signet. With no other configuration
+you get the KaleidoSwap market tools (assets, pairs, quotes), MPP/L402 and market data tools straight
+away. Wallet and swap tools need an RGB Lightning Node (see [Running a signet node](#running-a-signet-rgb-lightning-node)).
+
+The Spark and Liquid wallets are optional add-ons: they need a `WDK_SEED` (or `LIQUID_MNEMONIC`) **and**
+their wallet package, which is not installed by default to keep `npx` fast:
+
+```bash
+# Spark
+WDK_SEED="word1 ... word12" npx -y -p kaleido-mcp -p @tetherto/wdk-wallet-spark kaleido-mcp
+# Liquid
+LIQUID_MNEMONIC="word1 ... word12" npx -y -p kaleido-mcp -p @kaleidorg/wdk-wallet-liquid kaleido-mcp
+```
+
+If a seed is set but the package is missing, the server starts without those tools and says which
+package to install on stderr.
 
 ### Claude Code
 
 ```bash
-claude mcp add kaleido -e KALEIDO_NETWORK=signet -- npx -y kaleido-mcp
+claude mcp add kaleido -- npx -y kaleido-mcp
 ```
 
 or in a project `.mcp.json`:
@@ -75,16 +87,18 @@ Add to `claude_desktop_config.json` (Settings → Developer → Edit Config):
 }
 ```
 
-Mainnet:
+Mainnet has no public KaleidoSwap API yet, so `KALEIDO_NETWORK=mainnet` requires the API URL of the
+maker you trade with; the server refuses to start without it:
 
 ```json
 {
   "mcpServers": {
     "kaleido": {
       "command": "npx",
-      "args": ["-y", "kaleido-mcp"],
+      "args": ["-y", "-p", "kaleido-mcp", "-p", "@tetherto/wdk-wallet-spark", "kaleido-mcp"],
       "env": {
         "KALEIDO_NETWORK": "mainnet",
+        "KALEIDOSWAP_API_URL": "https://maker.example.com",
         "RLN_NODE_URL": "http://localhost:3001",
         "WDK_SEED": "word1 word2 ... word12"
       }
@@ -111,8 +125,8 @@ Once connected, ask the agent something like:
 
 | `KALEIDO_NETWORK` | KaleidoSwap API | `SPARK_NETWORK` | `LIQUID_NETWORK` | RGB proxy | RLN node |
 | --- | --- | --- | --- | --- | --- |
-| `mainnet` (default) | `https://api.kaleidoswap.com` | `MAINNET` | `mainnet` | none | `http://localhost:3001` |
-| `signet` | `https://api.signet.kaleidoswap.com` | `REGTEST` | `testnet` | `rpcs://proxy.iriswallet.com/0.2/json-rpc` | `http://localhost:3001` |
+| `signet` (default) | `https://api.signet.kaleidoswap.com` | `REGTEST` | `testnet` | `rpcs://proxy.iriswallet.com/0.2/json-rpc` | `http://localhost:3001` |
+| `mainnet` | none — `KALEIDOSWAP_API_URL` is required | `MAINNET` | `mainnet` | none | `http://localhost:3001` |
 
 The KaleidoSwap signet deployment runs on Mutinynet, the same network a `kaleido setup` node joins.
 Spark has no signet; its public test network is `REGTEST`, which is what the signet preset selects.
@@ -125,14 +139,14 @@ All variables are optional. Empty values are treated as unset.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `KALEIDO_NETWORK` | `mainnet` | `mainnet` or `signet`; sets the defaults in the table above |
-| `KALEIDOSWAP_API_URL` | per network | KaleidoSwap API base URL (no path suffix) |
+| `KALEIDO_NETWORK` | `signet` | `signet` or `mainnet`; sets the defaults in the table above |
+| `KALEIDOSWAP_API_URL` | per network | KaleidoSwap API base URL (no path suffix); required on mainnet |
 | `KALEIDO_API_URL` | — | Alias for `KALEIDOSWAP_API_URL`; also passed to the `kaleido` CLI as `--api-url` |
 | `RLN_NODE_URL` | `http://localhost:3001` | RGB Lightning Node HTTP API used by the `wdk_*` and swap tools |
 | `RGB_PROXY_ENDPOINT` | per network | RGB proxy used by `wdk_create_rgb_invoice` / `wdk_send_asset` when no `transport_endpoints` are passed |
-| `WDK_SEED` | — | BIP-39 mnemonic. Enables the Spark and WDK wallet tools; without it they are not loaded at all |
+| `WDK_SEED` | — | BIP-39 mnemonic. Enables the Spark and WDK wallet tools (needs `@tetherto/wdk-wallet-spark` installed); without it they are not loaded at all |
 | `SPARK_NETWORK` | per network | `MAINNET` or `REGTEST` |
-| `LIQUID_MNEMONIC` | `WDK_SEED` | BIP-39 mnemonic for the Liquid wallet. Enables the `liquid_*` tools; without it (and without `WDK_SEED`) the Liquid modules are not loaded |
+| `LIQUID_MNEMONIC` | `WDK_SEED` | BIP-39 mnemonic for the Liquid wallet. Enables the `liquid_*` tools (needs `@kaleidorg/wdk-wallet-liquid` installed); without it (and without `WDK_SEED`) the Liquid modules are not loaded |
 | `LIQUID_NETWORK` | per network | `mainnet`, `testnet` or `regtest` |
 | `LIQUID_ESPLORA_URL` | network default | Esplora API base URL for the Liquid wallet |
 | `SPARK_SCAN_API_KEY` | — | SparkScan API key |
@@ -146,7 +160,7 @@ All variables are optional. Empty values are treated as unset.
 ## Tools
 
 58 tools (plus 28 legacy aliases) are always available; `WDK_SEED` adds 30 Spark and WDK wallet
-tools and 10 Liquid wallet tools (the Liquid ones also come with `LIQUID_MNEMONIC` alone). The full, generated list with parameters is in [docs/TOOLS.md](docs/TOOLS.md) (regenerate with `npm run docs:tools`).
+tools and 10 Liquid wallet tools (the Liquid ones also come with `LIQUID_MNEMONIC` alone), provided their optional wallet packages are installed. The full, generated list with parameters is in [docs/TOOLS.md](docs/TOOLS.md) (regenerate with `npm run docs:tools`).
 
 | Group | Prefix | Highlights |
 | --- | --- | --- |
