@@ -39,6 +39,10 @@ All notable changes to this project are documented here. The format follows
 - `kaleido_node_*` lifecycle tools (`list`, `up`, `stop`, `down`, `ps`,
   `status`, `info`, `use`, `init`, `unlock`, `lock`) that drive a local RGB
   Lightning Node through the `kaleido` CLI.
+- Spark invoice tools: `spark_create_sats_invoice` and `spark_create_tokens_invoice` accept
+  `sender_spark_address` and `expiry_minutes`; `spark_pay_invoice` and `spark_get_invoices` are the
+  canonical names (`spark_pay_spark_invoice` / `spark_get_spark_invoices` remain as aliases), and
+  `spark_pay_invoice` takes a per-invoice `amount` string (sats or token base units).
 - `docs/TOOLS.md`, generated from the live tool registry by `npm run docs:tools`.
 - CI workflow running build and contract tests on pull requests and `main`.
 - `CHANGELOG.md` is shipped in the npm package.
@@ -48,6 +52,8 @@ All notable changes to this project are documented here. The format follows
 - `wdk_create_rgb_invoice` sent an empty `transport_endpoints` list, producing invoices the payer
   could not deliver a consignment for. It and `wdk_send_asset` now fall back to `RGB_PROXY_ENDPOINT`
   when no endpoints are passed; explicit `transport_endpoints` still win.
+- `spark_get_invoices` passed a bare array to the Spark SDK, which expects `{ invoices }`; Spark
+  invoice results containing bigints no longer fail to serialise.
 - `wdk_create_rgb_invoice` no longer returns a `usage` hint pointing at the removed order flow.
 
 ### Changed

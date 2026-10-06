@@ -22,7 +22,11 @@ const CORE_TOOLS = [
   'get_market_data',
 ]
 
-const SPARK_TOOLS = ['spark_get_balance', 'spark_get_address', 'spark_transfer_token']
+const SPARK_TOOLS = [
+  'spark_get_balance', 'spark_get_address', 'spark_transfer_token',
+  'spark_create_sats_invoice', 'spark_create_tokens_invoice',
+  'spark_pay_invoice', 'spark_pay_spark_invoice', 'spark_get_invoices', 'spark_get_spark_invoices',
+]
 
 const RLN_TOOLS = [
   'atomic_taker', 'close_channel', 'connect_peer', 'create_ln_invoice', 'create_rgb_invoice',
@@ -59,6 +63,24 @@ test('kaleido-mcp includes the canonical focused-server contracts and legacy ali
 
   assertHasAllTools(tools, [...CORE_TOOLS, ...SPARK_TOOLS, ...LIQUID_TOOLS])
   for (const name of REMOVED_TOOLS) assert.ok(!tools.includes(name), `${name} should be removed`)
+})
+
+test('Spark invoice tools expose sender/expiry options and reject ambiguous amounts offline', async () => {
+  await withClient({ cwd, env: { WDK_SEED: TEST_MNEMONIC, SPARK_NETWORK: 'REGTEST' } }, async client => {
+    const tools = (await client.listTools()).tools
+    for (const name of ['spark_create_sats_invoice', 'spark_create_tokens_invoice']) {
+      const props = Object.keys(tools.find(t => t.name === name).inputSchema.properties)
+      for (const opt of ['memo', 'sender_spark_address', 'expiry_minutes']) assert.ok(props.includes(opt), `${name} missing ${opt}`)
+    }
+
+    const sats = await client.callTool({ name: 'spark_create_sats_invoice', arguments: { amount_sats: 1, amount: 1 } })
+    assert.equal(sats.isError, true)
+    assert.match(JSON.parse(sats.content[0].text).error, /not both/)
+
+    const pay = await client.callTool({ name: 'spark_pay_invoice', arguments: { invoices: [{ invoice: 'spark1x', amount: '1', amount_sats: 1 }] } })
+    assert.equal(pay.isError, true)
+    assert.match(JSON.parse(pay.content[0].text).error, /only one of/)
+  })
 })
 
 test('without WDK_SEED the non-Spark tools are still registered', async () => {

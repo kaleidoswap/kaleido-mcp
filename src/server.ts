@@ -13,7 +13,8 @@
  *    spark_get_balance, spark_get_address, spark_create_lightning_invoice, spark_pay_lightning_invoice,
  *    spark_quote_lightning_payment, spark_get_deposit_address,
  *    spark_quote_withdraw, spark_withdraw, spark_get_transfers,
- *    spark_send_sats, spark_transfer_token, spark_mpp_pay, spark_get_token_balance
+ *    spark_send_sats, spark_transfer_token, spark_mpp_pay, spark_get_token_balance,
+ *    spark_create_sats_invoice, spark_create_tokens_invoice, spark_pay_invoice, spark_get_invoices
  *
  *  LAYER 2b — Liquid wallet tools (only when LIQUID_MNEMONIC or WDK_SEED is set):
  *    liquid_get_node_info, liquid_get_address, liquid_get_balance, liquid_get_asset_balance,

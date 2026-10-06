@@ -21,7 +21,10 @@ const GROUPS = [
 const withSeed = await listTools({ cwd, env: { WDK_SEED: TEST_MNEMONIC, SPARK_NETWORK: 'REGTEST' } })
 const seedless = new Set((await listTools({ cwd, env: {} })).map(t => t.name))
 
-const aliasOf = new Map()
+const aliasOf = new Map([
+  ['spark_pay_spark_invoice', 'spark_pay_invoice'],
+  ['spark_get_spark_invoices', 'spark_get_invoices'],
+])
 for (const t of withSeed) {
   const legacy = t.name.match(/^rln_(.+)$/) ?? t.name.match(/^(get_.+)$/)
   if (!legacy) continue

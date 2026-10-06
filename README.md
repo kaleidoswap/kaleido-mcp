@@ -152,7 +152,7 @@ tools and 10 Liquid wallet tools (the Liquid ones also come with `LIQUID_MNEMONI
 | --- | --- | --- |
 | KaleidoSwap DEX | `kaleidoswap_` | `get_assets`, `get_pairs`, `get_quote`, `atomic_init/execute/status`, `lsp_*` |
 | RGB Lightning Node | `wdk_` | balances, RGB issuance, assets and invoices, channels, payments, `atomic_taker` |
-| Spark wallet | `spark_` | balance, Lightning invoices, deposits/withdrawals, token transfers (needs `WDK_SEED`) |
+| Spark wallet | `spark_` | balance, Lightning and Spark invoices, deposits/withdrawals, token transfers (needs `WDK_SEED`) |
 | Liquid wallet | `liquid_` | address, L-BTC and asset balances, UTXOs, history, L-BTC and asset sends (needs `LIQUID_MNEMONIC` or `WDK_SEED`) |
 | WDK built-ins | camelCase | `getAddress`, `getBalance`, `transfer`, `sign`, `getCurrentPrice`, ... (needs `WDK_SEED`) |
 | Node lifecycle | `kaleido_node_` | `up`, `stop`, `down`, `init`, `unlock`, `lock`, `status`, ... |
