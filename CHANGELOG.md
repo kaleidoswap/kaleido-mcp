@@ -1,0 +1,51 @@
+# Changelog
+
+All notable changes to this project are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
+[Semantic Versioning](https://semver.org/) (pre-1.0: minor bumps may break).
+
+## [0.3.0] - 2026-10-06
+
+### Breaking
+
+- Removed the order-based swap tools: `kaleidoswap_place_order`,
+  `kaleidoswap_get_order_status`, `kaleidoswap_get_open_orders`,
+  `kaleidoswap_cancel_order` and `kaleidoswap_get_position`. The REST swap-order
+  surface is gone from `kaleido-sdk`; use the atomic HTLC flow
+  (`kaleidoswap_get_quote` → `kaleidoswap_atomic_init` → `wdk_atomic_taker` →
+  `kaleidoswap_atomic_execute` → `kaleidoswap_atomic_status`).
+
+### Added
+
+- `KALEIDO_NETWORK` preset (`mainnet` default, or `signet`). `signet` points the
+  KaleidoSwap tools at `https://api.signet.kaleidoswap.com` and Spark at
+  `REGTEST`. Explicit `KALEIDOSWAP_API_URL` / `SPARK_NETWORK` still win, and the
+  active network is logged to stderr at startup. Unknown values exit with an error.
+- `RGB_PROXY_ENDPOINT`, defaulting per network (signet: `rpcs://proxy.iriswallet.com/0.2/json-rpc`,
+  the same proxy the `kaleido` CLI uses; mainnet: none).
+- `KALEIDO_API_URL` is accepted as an alias for `KALEIDOSWAP_API_URL`.
+- `kaleido_node_*` lifecycle tools (`list`, `up`, `stop`, `down`, `ps`,
+  `status`, `info`, `use`, `init`, `unlock`, `lock`) that drive a local RGB
+  Lightning Node through the `kaleido` CLI.
+- `docs/TOOLS.md`, generated from the live tool registry by `npm run docs:tools`.
+- CI workflow running build and contract tests on pull requests and `main`.
+- `CHANGELOG.md` is shipped in the npm package.
+
+### Fixed
+
+- `wdk_create_rgb_invoice` sent an empty `transport_endpoints` list, producing invoices the payer
+  could not deliver a consignment for. It and `wdk_send_asset` now fall back to `RGB_PROXY_ENDPOINT`
+  when no endpoints are passed; explicit `transport_endpoints` still win.
+- `wdk_create_rgb_invoice` no longer returns a `usage` hint pointing at the removed order flow.
+
+### Changed
+
+- `kaleido-sdk` bumped to 0.1.18 (RGB Lightning Node 0.9.0 API).
+- The Spark/WDK wallet modules are only loaded when `WDK_SEED` is set; seedless
+  startup is roughly 45% faster.
+- Empty environment variables are treated as unset, so the defaults apply.
+- The MCP server now reports the package version instead of a hardcoded `1.0.0`.
+- `@tetherto/wdk-mcp-toolkit` is pinned to a commit (no usable npm release yet).
+- Contract tests are self-contained and no longer depend on files outside the repo.
+- Tool descriptions no longer reference the removed order flow.
+- README rewritten around `npx -y kaleido-mcp` with signet quickstart.
