@@ -154,17 +154,20 @@ All variables are optional. Empty values are treated as unset.
 | `KALEIDO_BIN` | auto-detect | Path to the `kaleido` CLI used by `kaleido_node_*` tools |
 | `KALEIDO_NODE_URL` | — | Passed to the `kaleido` CLI as `--node-url` |
 | `KALEIDO_ENV_NAME` | — | Default environment for `kaleido_node_up/stop/down/ps` |
+| `KALEIDOSWAP_MAKER_URL` | signet maker | Boltz `/v2` maker for the `kaleidoswap_submarine_*` tools (default `https://maker.signet.kaleidoswap.com/v2`; no default on mainnet) |
+| `KALEIDOSWAP_SWAP_DIR` | `~/.kaleido-mcp/swaps` | Where submarine swap records are kept. They hold what a refund needs besides the mnemonic: keep this directory |
 | `PORT` | — | Serve Streamable HTTP on this port instead of stdio (`GET /health` for probes) |
 | `MCP_AUTH_TOKEN` | — | Require `Authorization: Bearer <token>` in HTTP mode |
 
 ## Tools
 
-58 tools (plus 28 legacy aliases) are always available; `WDK_SEED` adds 30 Spark and WDK wallet
+62 tools (plus 28 legacy aliases) are always available; `WDK_SEED` adds 30 Spark and WDK wallet
 tools and 10 Liquid wallet tools (the Liquid ones also come with `LIQUID_MNEMONIC` alone), provided their optional wallet packages are installed. The full, generated list with parameters is in [docs/TOOLS.md](docs/TOOLS.md) (regenerate with `npm run docs:tools`).
 
 | Group | Prefix | Highlights |
 | --- | --- | --- |
 | KaleidoSwap DEX | `kaleidoswap_` | `get_assets`, `get_pairs`, `get_quote`, `atomic_init/execute/status`, `lsp_*` |
+| KaleidoSwap submarine swaps | `kaleidoswap_submarine_` | pay a Lightning invoice from L-USDT/L-BTC: `pairs`, `create`, `fund`, `status` (needs `@kaleidorg/swap-sdk`, Node ≥ 22) |
 | RGB Lightning Node | `wdk_` | balances, RGB issuance, assets and invoices, channels, payments, `atomic_taker` |
 | Spark wallet | `spark_` | balance, Lightning and Spark invoices, deposits/withdrawals, token transfers (needs `WDK_SEED`) |
 | Liquid wallet | `liquid_` | address, L-BTC and asset balances, UTXOs, history, L-BTC and asset sends (needs `LIQUID_MNEMONIC` or `WDK_SEED`) |
@@ -185,6 +188,22 @@ tools and 10 Liquid wallet tools (the Liquid ones also come with `LIQUID_MNEMONI
 
 The swap needs a Lightning channel with the KaleidoSwap node that can carry the asset you receive.
 `kaleidoswap_lsp_quote_asset_channel` and `kaleidoswap_lsp_create_asset_channel` buy one.
+
+### Submarine swap flow (pay Lightning from Liquid)
+
+These use the new Boltz `/v2`-shaped maker ([kaleidoswap-maker-rs](https://github.com/kaleidoswap/kaleidoswap-maker-rs))
+through [`@kaleidorg/swap-sdk`](https://www.npmjs.com/package/@kaleidorg/swap-sdk), an optional peer that needs Node ≥ 22
+(`npm i @kaleidorg/swap-sdk`). Only signet has a public maker today.
+
+1. `kaleidoswap_submarine_pairs` — what can pay a Lightning invoice (live: `L-USDT → BTC`), limits and fees
+2. `kaleidoswap_submarine_create { invoice, from_asset }` — opens the swap; returns the exact amount to lock. No funds move
+3. `kaleidoswap_submarine_fund { swap_id }` — **spend**: locks that amount from the Liquid wallet. Takes only the swap id;
+   amount, asset and address come from the stored swap
+4. `kaleidoswap_submarine_status { swap_id }` — `transaction.claimed` means the invoice was paid
+
+The per-swap refund key is derived from the wallet mnemonic and never leaves the server. Each swap's record is written
+to `KALEIDOSWAP_SWAP_DIR` before it can be funded. If a funded swap fails, the funds stay in the lockup until refunded;
+an L-USDT refund is built with swap-sdk from the mnemonic and that record (not yet exposed as a tool).
 
 ## RGB
 

@@ -55,6 +55,9 @@
  */
 
 import { createRequire } from 'node:module'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import type { LiquidAccount } from '@kaleidorg/wdk-wallet-liquid'
 import { WdkMcpServer, WALLET_TOOLS, PRICING_TOOLS } from '@tetherto/wdk-mcp-toolkit'
 import { KaleidoClient } from 'kaleido-sdk'
 import { registerRlnTools } from './tools/rln-tools.js'
@@ -62,6 +65,7 @@ import { registerKaleidoswapTools } from './tools/kaleidoswap-tools.js'
 import { registerMppTools } from './tools/mpp-tools.js'
 import { registerMarketTools } from './tools/market-tools.js'
 import { registerNodeLifecycleTools } from './tools/node-lifecycle-tools.js'
+import { registerSubmarineTools } from './tools/submarine-tools.js'
 
 export interface KaleidoMcpConfig {
   /** BIP-39 seed phrase for WDK Spark wallet */
@@ -84,6 +88,12 @@ export interface KaleidoMcpConfig {
   liquidNetwork?: 'mainnet' | 'testnet' | 'regtest'
   /** Liquid Esplora API base URL (default: the network's built-in client) */
   liquidEsploraUrl?: string
+  /** Network of the Boltz /v2 maker used for submarine swaps (default: signet) */
+  swapNetwork?: 'signet' | 'regtest' | 'mainnet'
+  /** Boltz /v2 maker base URL override for submarine swaps */
+  makerV2Url?: string
+  /** Directory where submarine swap records are persisted (default: ~/.kaleido-mcp/swaps) */
+  swapStateDir?: string
 }
 
 function optionalPeerMissing(error: unknown, pkg: string): boolean {
@@ -134,15 +144,17 @@ export async function createServer(config: KaleidoMcpConfig): Promise<WdkMcpServ
     process.stderr.write('[kaleido-mcp] Spark tools disabled (WDK_SEED not set)\n')
   }
 
+  let liquidAccount: LiquidAccount | undefined
   if (config.liquidMnemonic) {
     try {
       const { LiquidAccount } = await import('@kaleidorg/wdk-wallet-liquid')
       const { registerLiquidTools } = await import('./tools/liquid-tools.js')
-      registerLiquidTools(server, new LiquidAccount({
+      liquidAccount = new LiquidAccount({
         mnemonic: config.liquidMnemonic,
         network: config.liquidNetwork ?? 'mainnet',
         ...(config.liquidEsploraUrl ? { esploraUrl: config.liquidEsploraUrl } : {}),
-      }))
+      })
+      registerLiquidTools(server, liquidAccount)
     } catch (error) {
       const reason = optionalPeerMissing(error, '@kaleidorg/wdk-wallet-liquid') ? installHint('@kaleidorg/wdk-wallet-liquid') : `failed to initialise: ${error}`
       process.stderr.write(`[kaleido-mcp] Liquid tools disabled (${reason})\n`)
@@ -165,6 +177,17 @@ export async function createServer(config: KaleidoMcpConfig): Promise<WdkMcpServ
   // 4. KaleidoSwap DEX tools (quotes, atomic, LSP)
   // -------------------------------------------------------------------------
   registerKaleidoswapTools(server, sdk.maker, sdk.rln)
+
+  // -------------------------------------------------------------------------
+  // 4b. Submarine swaps on the Boltz /v2 maker (pay Lightning from Liquid)
+  // -------------------------------------------------------------------------
+  registerSubmarineTools(server, {
+    network: config.swapNetwork ?? 'signet',
+    ...(config.makerV2Url ? { makerUrl: config.makerV2Url } : {}),
+    ...(config.liquidMnemonic || config.wdkSeed ? { mnemonic: config.liquidMnemonic || config.wdkSeed } : {}),
+    stateDir: config.swapStateDir ?? join(homedir(), '.kaleido-mcp', 'swaps'),
+    ...(liquidAccount ? { liquid: liquidAccount } : {}),
+  })
 
   // -------------------------------------------------------------------------
   // 5. MPP / L402 / 402index.io discovery

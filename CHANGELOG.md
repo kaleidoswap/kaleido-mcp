@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor bumps may break).
 
+## [Unreleased]
+
+### Added
+
+- Submarine swaps on the Boltz `/v2` maker (kaleidoswap-maker-rs): pay a Lightning invoice from L-USDT or L-BTC on
+  Liquid. `kaleidoswap_submarine_pairs`, `kaleidoswap_submarine_create`, `kaleidoswap_submarine_fund` (spend; takes only
+  the swap id) and `kaleidoswap_submarine_status`, through the optional peer `@kaleidorg/swap-sdk` (Node ≥ 22). Refund
+  keys derive from the wallet mnemonic; swap records are persisted in `KALEIDOSWAP_SWAP_DIR` before funding. New
+  settings: `KALEIDOSWAP_MAKER_URL`, `KALEIDOSWAP_SWAP_DIR`.
+
 ## [0.3.1] - 2026-10-06
 
 ### Changed

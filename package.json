@@ -51,7 +51,8 @@
   },
   "peerDependencies": {
     "@kaleidorg/wdk-wallet-liquid": "^1.0.0-beta.9",
-    "@tetherto/wdk-wallet-spark": "^1.0.0-beta.28"
+    "@tetherto/wdk-wallet-spark": "^1.0.0-beta.28",
+    "@kaleidorg/swap-sdk": "^0.10.0"
   },
   "peerDependenciesMeta": {
     "@kaleidorg/wdk-wallet-liquid": {
@@ -59,9 +60,13 @@
     },
     "@tetherto/wdk-wallet-spark": {
       "optional": true
+    },
+    "@kaleidorg/swap-sdk": {
+      "optional": true
     }
   },
   "devDependencies": {
+    "@kaleidorg/swap-sdk": "^0.10.0",
     "@kaleidorg/wdk-wallet-liquid": "^1.0.0-beta.9",
     "@tetherto/wdk-wallet-spark": "^1.0.0-beta.28",
     "@types/node": "^26.6.4",

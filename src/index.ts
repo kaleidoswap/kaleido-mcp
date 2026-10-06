@@ -24,6 +24,8 @@
  *   RLN_NODE_URL            — RLN daemon URL (default: http://localhost:3001)
  *   RGB_PROXY_ENDPOINT      — default RGB proxy for RGB invoices (default: per KALEIDO_NETWORK)
  *   KALEIDOSWAP_API_URL     — KaleidoSwap API (default on signet; required on mainnet); KALEIDO_API_URL is also accepted
+ *   KALEIDOSWAP_MAKER_URL   — Boltz /v2 maker for submarine swaps (default: the signet maker; none on mainnet)
+ *   KALEIDOSWAP_SWAP_DIR    — where submarine swap records (refund material) are kept (default: ~/.kaleido-mcp/swaps)
  *   PORT                    — Enable StreamableHTTP on this port (default: stdio)
  *   MCP_AUTH_TOKEN          — Bearer token for HTTP mode
  *
@@ -86,6 +88,10 @@ async function main() {
     liquidMnemonic: LIQUID_MNEMONIC,
     liquidNetwork: LIQUID_NET,
     liquidEsploraUrl: process.env.LIQUID_ESPLORA_URL,
+    // Boltz /v2 maker (submarine swaps). Only signet has a public maker today.
+    swapNetwork: NETWORK === 'mainnet' ? 'mainnet' : 'signet',
+    makerV2Url: process.env.KALEIDOSWAP_MAKER_URL,
+    swapStateDir: process.env.KALEIDOSWAP_SWAP_DIR,
   })
 
   const label = `${NETWORK}: Spark(${WDK_SEED ? SPARK_NET : 'disabled'}) + Liquid(${LIQUID_MNEMONIC ? LIQUID_NET : 'disabled'}) + RLN(${RLN_URL}) + KaleidoSwap(${KALEIDO_URL})`
