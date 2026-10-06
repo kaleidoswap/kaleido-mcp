@@ -24,6 +24,20 @@ const CORE_TOOLS = [
 
 const SPARK_TOOLS = ['spark_get_balance', 'spark_get_address', 'spark_transfer_token']
 
+const RLN_TOOLS = [
+  'atomic_taker', 'close_channel', 'connect_peer', 'create_ln_invoice', 'create_rgb_invoice',
+  'create_utxos', 'get_address', 'get_asset_balance', 'get_balances', 'get_channel_id',
+  'get_node_info', 'get_swap', 'issue_asset', 'list_assets', 'list_channels', 'list_payments',
+  'list_swaps', 'list_transfers', 'mpp_pay', 'open_channel', 'pay_invoice', 'refresh_transfers',
+  'send_asset', 'send_btc',
+]
+
+const LIQUID_TOOLS = [
+  'liquid_get_node_info', 'liquid_get_address', 'liquid_get_balance', 'liquid_get_asset_balance',
+  'liquid_list_assets', 'liquid_list_transactions', 'liquid_list_unspents',
+  'liquid_send_btc', 'liquid_send_asset', 'liquid_get_fee_rates',
+]
+
 const REMOVED_TOOLS = [
   'kaleidoswap_place_order',
   'kaleidoswap_get_order_status',
@@ -43,7 +57,7 @@ test('kaleido-mcp includes the canonical focused-server contracts and legacy ali
     },
   })
 
-  assertHasAllTools(tools, [...CORE_TOOLS, ...SPARK_TOOLS])
+  assertHasAllTools(tools, [...CORE_TOOLS, ...SPARK_TOOLS, ...LIQUID_TOOLS])
   for (const name of REMOVED_TOOLS) assert.ok(!tools.includes(name), `${name} should be removed`)
 })
 
@@ -52,6 +66,85 @@ test('without WDK_SEED the non-Spark tools are still registered', async () => {
 
   assertHasAllTools(tools, CORE_TOOLS)
   for (const name of SPARK_TOOLS) assert.ok(!tools.includes(name), `${name} should need WDK_SEED`)
+  for (const name of LIQUID_TOOLS) assert.ok(!tools.includes(name), `${name} should need LIQUID_MNEMONIC`)
+})
+
+test('every RLN tool is exposed as wdk_* with an rln_* alias', async () => {
+  const tools = await listToolNames({ cwd, env: { KALEIDO_NETWORK: 'signet' } })
+
+  assert.deepEqual(tools.filter(n => n.startsWith('wdk_')).sort(), RLN_TOOLS.map(n => `wdk_${n}`))
+  assert.deepEqual(tools.filter(n => n.startsWith('rln_')).sort(), RLN_TOOLS.map(n => `rln_${n}`))
+})
+
+test('LIQUID_MNEMONIC alone enables the Liquid tools on testnet under the signet preset', async () => {
+  await withClient({ cwd, env: { KALEIDO_NETWORK: 'signet', LIQUID_MNEMONIC: TEST_MNEMONIC } }, async client => {
+    const names = (await client.listTools()).tools.map(t => t.name)
+    assertHasAllTools(names, LIQUID_TOOLS)
+    for (const name of SPARK_TOOLS) assert.ok(!names.includes(name), `${name} should need WDK_SEED`)
+
+    const res = await client.callTool({ name: 'liquid_get_address', arguments: {} })
+    assert.ok(!res.isError)
+    assert.match(JSON.parse(res.content[0].text).address, /^tlq1/)
+  })
+})
+
+test('an unknown LIQUID_NETWORK fails fast', async () => {
+  const { spawnSync } = await import('node:child_process')
+  const res = spawnSync(process.execPath, ['dist/index.js'], {
+    cwd,
+    env: { PATH: process.env.PATH ?? '', LIQUID_NETWORK: 'liquidv1' },
+    input: '',
+    encoding: 'utf8',
+  })
+
+  assert.equal(res.status, 1)
+  assert.match(res.stderr, /LIQUID_NETWORK must be one of/)
+})
+
+test('wdk_issue_asset validates arguments and scales display amounts by precision', async () => {
+  const { createServer } = await import('node:http')
+  const bodies = []
+  const rln = createServer((req, res) => {
+    let raw = ''
+    req.on('data', c => { raw += c })
+    req.on('end', () => {
+      const body = raw ? JSON.parse(raw) : null
+      bodies.push({ url: req.url, body })
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(req.url === '/listtransfers'
+        ? { transfers: [{ idx: 1, kind: 'Issuance', status: 'Settled', requested_assignment: { type: 'Fungible', value: 150 }, created_at: 1, updated_at: 2 }] }
+        : { asset: { asset_id: 'rgb:test', name: body?.name, ticker: body?.ticker, precision: body?.precision, issued_supply: body?.amounts?.[0] ?? 1 } }))
+    })
+  })
+  await new Promise(r => rln.listen(0, '127.0.0.1', r))
+  const RLN_NODE_URL = `http://127.0.0.1:${rln.address().port}`
+
+  try {
+    await withClient({ cwd, env: { KALEIDO_NETWORK: 'signet', RLN_NODE_URL } }, async client => {
+      const call = async (name, args) => {
+        const res = await client.callTool({ name, arguments: args })
+        return { isError: res.isError === true, body: JSON.parse(res.content[0].text) }
+      }
+
+      assert.deepEqual(await call('wdk_issue_asset', { name: 'No Ticker', amount: 1 }), { isError: true, body: { error: 'ticker is required for NIA' } })
+      assert.deepEqual(await call('rln_issue_asset', { name: 'No Amount', ticker: 'TKT' }), { isError: true, body: { error: 'amount is required for NIA' } })
+
+      const nia = await call('wdk_issue_asset', { name: 'Ticket', ticker: 'TKT', amount: 1.5, precision: 2 })
+      assert.equal(nia.isError, false)
+      assert.equal(nia.body.issued_supply_raw, 150)
+
+      const uda = await call('rln_issue_asset', { schema: 'UDA', name: 'Badge', ticker: 'BDG' })
+      assert.equal(uda.body.issued_supply_raw, 1)
+
+      const transfers = await call('wdk_list_transfers', { asset_id: 'rgb:test' })
+      assert.equal(transfers.body[0].amount_raw, 150)
+    })
+  } finally {
+    rln.close()
+  }
+
+  assert.deepEqual(bodies.map(b => b.url), ['/issueassetnia', '/issueassetuda', '/listtransfers'])
+  assert.deepEqual(bodies[0].body, { amounts: [150], ticker: 'TKT', name: 'Ticket', precision: 2 })
 })
 
 test('server reports the package version', async () => {

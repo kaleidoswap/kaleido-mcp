@@ -15,12 +15,17 @@
  *    spark_quote_withdraw, spark_withdraw, spark_get_transfers,
  *    spark_send_sats, spark_transfer_token, spark_mpp_pay, spark_get_token_balance
  *
+ *  LAYER 2b — Liquid wallet tools (only when LIQUID_MNEMONIC or WDK_SEED is set):
+ *    liquid_get_node_info, liquid_get_address, liquid_get_balance, liquid_get_asset_balance,
+ *    liquid_list_assets, liquid_list_transactions, liquid_list_unspents,
+ *    liquid_send_btc, liquid_send_asset, liquid_get_fee_rates
+ *
  *  LAYER 3 — RLN (RGB Lightning Node) tools:
  *    wdk_get_node_info, wdk_get_balances, wdk_list_assets, wdk_get_asset_balance,
  *    wdk_get_address, wdk_create_rgb_invoice, wdk_create_ln_invoice,
  *    wdk_pay_invoice, wdk_send_btc, wdk_send_asset, wdk_list_channels,
  *    wdk_connect_peer, wdk_open_channel, wdk_close_channel, wdk_get_channel_id,
- *    wdk_list_payments,
+ *    wdk_list_payments, wdk_create_utxos, wdk_issue_asset, wdk_list_transfers,
  *    wdk_refresh_transfers, wdk_atomic_taker, wdk_list_swaps,
  *    wdk_get_swap, wdk_mpp_pay
  *
@@ -45,7 +50,7 @@
  *    kaleido_node_unlock, kaleido_node_lock
  *
  * Legacy aliases are retained temporarily for older `rln_*` and generic `get_*` callers.
- * The Spark wallet modules are imported lazily so seedless startups skip them.
+ * The Spark and Liquid wallet modules are imported lazily so seedless startups skip them.
  */
 
 import { createRequire } from 'node:module'
@@ -72,6 +77,12 @@ export interface KaleidoMcpConfig {
   kaleidoswapApiUrl: string
   /** Default RGB proxy advertised on RGB invoices */
   rgbProxyEndpoint?: string
+  /** BIP-39 mnemonic for the Liquid wallet; enables the liquid_* tools */
+  liquidMnemonic?: string
+  /** Liquid network (default: mainnet) */
+  liquidNetwork?: 'mainnet' | 'testnet' | 'regtest'
+  /** Liquid Esplora API base URL (default: the network's built-in client) */
+  liquidEsploraUrl?: string
 }
 
 export const VERSION: string = createRequire(import.meta.url)('../package.json').version
@@ -110,6 +121,22 @@ export async function createServer(config: KaleidoMcpConfig): Promise<WdkMcpServ
     }
   } else {
     process.stderr.write('[kaleido-mcp] Spark tools disabled (WDK_SEED not set)\n')
+  }
+
+  if (config.liquidMnemonic) {
+    try {
+      const { LiquidAccount } = await import('@kaleidorg/wdk-wallet-liquid')
+      const { registerLiquidTools } = await import('./tools/liquid-tools.js')
+      registerLiquidTools(server, new LiquidAccount({
+        mnemonic: config.liquidMnemonic,
+        network: config.liquidNetwork ?? 'mainnet',
+        ...(config.liquidEsploraUrl ? { esploraUrl: config.liquidEsploraUrl } : {}),
+      }))
+    } catch (error) {
+      process.stderr.write(`[kaleido-mcp] Liquid tools disabled (failed to initialise): ${error}\n`)
+    }
+  } else {
+    process.stderr.write('[kaleido-mcp] Liquid tools disabled (LIQUID_MNEMONIC / WDK_SEED not set)\n')
   }
 
   const sdk = KaleidoClient.create({

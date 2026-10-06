@@ -17,6 +17,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Consolidated the standalone wallet MCP servers into kaleido-mcp, which now supersedes
+  `wdk-wallet-mcp` (RLN), `wdk-wallet-spark-mcp` and `wdk-wallet-liquid-mcp`; tool names are unchanged.
+- RGB issuance tools `wdk_issue_asset` (NIA, CFA or UDA; the display amount is scaled by
+  `precision`, invalid arguments return an `isError` result), `wdk_create_utxos` and
+  `wdk_list_transfers`, each with an `rln_*` alias.
+- Liquid wallet tools (`liquid_get_node_info`, `liquid_get_address`, `liquid_get_balance`,
+  `liquid_get_asset_balance`, `liquid_list_assets`, `liquid_list_transactions`,
+  `liquid_list_unspents`, `liquid_send_btc`, `liquid_send_asset`, `liquid_get_fee_rates`) backed
+  by an in-process LWK wallet (`@kaleidorg/wdk-wallet-liquid`, adds about 10 MB of WebAssembly to
+  the install). Enabled by `LIQUID_MNEMONIC` or, failing that, `WDK_SEED`; the modules are only
+  loaded when one is set. `LIQUID_NETWORK` follows `KALEIDO_NETWORK` (`mainnet`, or `testnet` on
+  signet) and `LIQUID_ESPLORA_URL` overrides the Esplora endpoint.
 - `KALEIDO_NETWORK` preset (`mainnet` default, or `signet`). `signet` points the
   KaleidoSwap tools at `https://api.signet.kaleidoswap.com` and Spark at
   `REGTEST`. Explicit `KALEIDOSWAP_API_URL` / `SPARK_NETWORK` still win, and the

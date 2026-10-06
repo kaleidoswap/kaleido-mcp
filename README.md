@@ -8,11 +8,15 @@ One MCP server that gives an AI agent the whole KaleidoSwap stack over a single 
 - **KaleidoSwap DEX** — assets, pairs, quotes, atomic BTC ↔ RGB swaps, LSP channel purchases
 - **RGB Lightning Node (RLN)** — on-chain BTC, RGB assets, Lightning channels and payments
 - **Spark wallet** (optional, via WDK) — fee-free L2 transfers, Lightning pay/receive, BTC bridge
+- **Liquid wallet** (optional) — L-BTC and Liquid assets such as USDt from an in-process LWK wallet
 - **MPP / L402** — pay for and consume payment-gated APIs, discover them on 402index.io
 - **Market data** — spot prices, OHLCV, Fear & Greed index
 - **Node lifecycle** — start, stop, init and unlock a local RLN through the `kaleido` CLI
 
 See [docs/TOOLS.md](docs/TOOLS.md) for every tool and its parameters.
+
+kaleido-mcp supersedes the standalone `wdk-wallet-mcp` (RLN), `wdk-wallet-spark-mcp` and
+`wdk-wallet-liquid-mcp` servers: their tools are included here under the same names.
 
 > **Beta software.** Start on signet. Mainnet use is at your own risk.
 
@@ -27,7 +31,7 @@ KALEIDO_NETWORK=signet npx -y kaleido-mcp
 The server speaks MCP over stdio and logs to stderr. With no other configuration you get the
 KaleidoSwap market tools (assets, pairs, quotes), MPP/L402 and market data tools straight away.
 Wallet and swap tools need an RGB Lightning Node (see [Running a signet node](#running-a-signet-rgb-lightning-node))
-and, for Spark, a `WDK_SEED`.
+and, for the Spark and Liquid wallets, a `WDK_SEED`.
 
 ### Claude Code
 
@@ -105,13 +109,14 @@ Once connected, ask the agent something like:
 
 `KALEIDO_NETWORK` picks a preset. Any variable you set explicitly overrides the preset.
 
-| `KALEIDO_NETWORK` | KaleidoSwap API | `SPARK_NETWORK` | RGB proxy | RLN node |
-| --- | --- | --- | --- | --- |
-| `mainnet` (default) | `https://api.kaleidoswap.com` | `MAINNET` | none | `http://localhost:3001` |
-| `signet` | `https://api.signet.kaleidoswap.com` | `REGTEST` | `rpcs://proxy.iriswallet.com/0.2/json-rpc` | `http://localhost:3001` |
+| `KALEIDO_NETWORK` | KaleidoSwap API | `SPARK_NETWORK` | `LIQUID_NETWORK` | RGB proxy | RLN node |
+| --- | --- | --- | --- | --- | --- |
+| `mainnet` (default) | `https://api.kaleidoswap.com` | `MAINNET` | `mainnet` | none | `http://localhost:3001` |
+| `signet` | `https://api.signet.kaleidoswap.com` | `REGTEST` | `testnet` | `rpcs://proxy.iriswallet.com/0.2/json-rpc` | `http://localhost:3001` |
 
 The KaleidoSwap signet deployment runs on Mutinynet, the same network a `kaleido setup` node joins.
 Spark has no signet; its public test network is `REGTEST`, which is what the signet preset selects.
+Liquid has no signet either; the signet preset uses Liquid `testnet`.
 The active network is printed to stderr at startup.
 
 ## Environment variables
@@ -127,6 +132,9 @@ All variables are optional. Empty values are treated as unset.
 | `RGB_PROXY_ENDPOINT` | per network | RGB proxy used by `wdk_create_rgb_invoice` / `wdk_send_asset` when no `transport_endpoints` are passed |
 | `WDK_SEED` | — | BIP-39 mnemonic. Enables the Spark and WDK wallet tools; without it they are not loaded at all |
 | `SPARK_NETWORK` | per network | `MAINNET` or `REGTEST` |
+| `LIQUID_MNEMONIC` | `WDK_SEED` | BIP-39 mnemonic for the Liquid wallet. Enables the `liquid_*` tools; without it (and without `WDK_SEED`) the Liquid modules are not loaded |
+| `LIQUID_NETWORK` | per network | `mainnet`, `testnet` or `regtest` |
+| `LIQUID_ESPLORA_URL` | network default | Esplora API base URL for the Liquid wallet |
 | `SPARK_SCAN_API_KEY` | — | SparkScan API key |
 | `SPARK_USDT_TOKEN` | — | Default Spark token identifier (`btkn1...`) for token tools |
 | `KALEIDO_BIN` | auto-detect | Path to the `kaleido` CLI used by `kaleido_node_*` tools |
@@ -137,14 +145,15 @@ All variables are optional. Empty values are treated as unset.
 
 ## Tools
 
-55 tools (plus 25 legacy aliases) are always available; `WDK_SEED` adds 30 Spark and WDK wallet
-tools. The full, generated list with parameters is in [docs/TOOLS.md](docs/TOOLS.md) (regenerate with `npm run docs:tools`).
+58 tools (plus 28 legacy aliases) are always available; `WDK_SEED` adds 30 Spark and WDK wallet
+tools and 10 Liquid wallet tools (the Liquid ones also come with `LIQUID_MNEMONIC` alone). The full, generated list with parameters is in [docs/TOOLS.md](docs/TOOLS.md) (regenerate with `npm run docs:tools`).
 
 | Group | Prefix | Highlights |
 | --- | --- | --- |
 | KaleidoSwap DEX | `kaleidoswap_` | `get_assets`, `get_pairs`, `get_quote`, `atomic_init/execute/status`, `lsp_*` |
-| RGB Lightning Node | `wdk_` | balances, RGB assets and invoices, channels, payments, `atomic_taker` |
+| RGB Lightning Node | `wdk_` | balances, RGB issuance, assets and invoices, channels, payments, `atomic_taker` |
 | Spark wallet | `spark_` | balance, Lightning invoices, deposits/withdrawals, token transfers (needs `WDK_SEED`) |
+| Liquid wallet | `liquid_` | address, L-BTC and asset balances, UTXOs, history, L-BTC and asset sends (needs `LIQUID_MNEMONIC` or `WDK_SEED`) |
 | WDK built-ins | camelCase | `getAddress`, `getBalance`, `transfer`, `sign`, `getCurrentPrice`, ... (needs `WDK_SEED`) |
 | Node lifecycle | `kaleido_node_` | `up`, `stop`, `down`, `init`, `unlock`, `lock`, `status`, ... |
 | Paid APIs | `mpp_`, `l402_`, `search_paid_apis` | challenge, pay, submit credential, discover |
@@ -170,11 +179,14 @@ through the `wdk_*` tools and needs `RLN_NODE_URL` to point at an unlocked node:
 
 | Operation | Tool |
 | --- | --- |
+| Create free colored UTXOs | `wdk_create_utxos` |
+| Issue your own asset (NIA token, CFA collectible, UDA/NFT) | `wdk_issue_asset` |
 | List RGB assets held (NIA, UDA, CFA) | `wdk_list_assets` |
 | Balance of one asset (settled, future, spendable, off-chain) | `wdk_get_asset_balance` |
 | Receive an asset on-chain | `wdk_create_rgb_invoice` |
 | Send an asset on-chain | `wdk_send_asset` |
 | Sync pending transfers | `wdk_refresh_transfers` |
+| Transfer history and status for one asset | `wdk_list_transfers` |
 | Open a channel that carries an asset | `wdk_open_channel` with `asset_id` and `asset_amount` |
 | See asset allocations per channel | `wdk_list_channels` |
 | Swap BTC ↔ RGB over Lightning | atomic flow above (`RGB_LN` layer) |
@@ -184,8 +196,8 @@ through the `wdk_*` tools and needs `RLN_NODE_URL` to point at an unlocked node:
 `kaleido` CLI uses) unless you pass `transport_endpoints` or set `RGB_PROXY_ENDPOINT`. On mainnet there
 is no default, so set one.
 
-Receiving RGB on-chain needs free colored UTXOs on the node: fund it via `wdk_get_address`, then run
-`kaleido wallet create-utxos`.
+Issuing or receiving RGB on-chain needs free colored UTXOs on the node: fund it via `wdk_get_address`,
+then call `wdk_create_utxos` (or run `kaleido wallet create-utxos`).
 
 ## Running a signet RGB Lightning Node
 

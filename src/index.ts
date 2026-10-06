@@ -4,6 +4,7 @@
  *
  * Single MCP server for all KaleidoSwap agent operations:
  *   • WDK Spark L2 wallet  (fee-free transfers, Lightning pay/receive, BTC bridge)
+ *   • Liquid wallet        (L-BTC and Liquid assets via in-process LWK)
  *   • RLN node             (RGB assets, Lightning channels, atomic HTLC swaps)
  *   • KaleidoSwap DEX      (quotes, atomic swaps, LSPS1 channels)
  *   • MPP / L402           (payment-gated API access, challenge/credential flow)
@@ -17,6 +18,9 @@
  *   SPARK_NETWORK           — MAINNET | REGTEST (default: MAINNET, REGTEST on signet)
  *   SPARK_SCAN_API_KEY      — SparkScan API key
  *   SPARK_USDT_TOKEN        — Spark USDT token identifier (btkn1...)
+ *   LIQUID_MNEMONIC         — BIP-39 mnemonic for the Liquid wallet tools (default: WDK_SEED)
+ *   LIQUID_NETWORK          — mainnet | testnet | regtest (default: mainnet, testnet on signet)
+ *   LIQUID_ESPLORA_URL      — Liquid Esplora API base URL
  *   RLN_NODE_URL            — RLN daemon URL (default: http://localhost:3001)
  *   RGB_PROXY_ENDPOINT      — default RGB proxy for RGB invoices (default: per KALEIDO_NETWORK)
  *   KALEIDOSWAP_API_URL     — KaleidoSwap API (default: per KALEIDO_NETWORK); KALEIDO_API_URL is also accepted
@@ -33,8 +37,8 @@ import { createServer } from './server.js'
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http'
 
 const NETWORK_PRESETS = {
-  mainnet: { kaleidoswapApiUrl: 'https://api.kaleidoswap.com', sparkNetwork: 'MAINNET', rgbProxyEndpoint: undefined },
-  signet: { kaleidoswapApiUrl: 'https://api.signet.kaleidoswap.com', sparkNetwork: 'REGTEST', rgbProxyEndpoint: 'rpcs://proxy.iriswallet.com/0.2/json-rpc' },
+  mainnet: { kaleidoswapApiUrl: 'https://api.kaleidoswap.com', sparkNetwork: 'MAINNET', liquidNetwork: 'mainnet', rgbProxyEndpoint: undefined },
+  signet: { kaleidoswapApiUrl: 'https://api.signet.kaleidoswap.com', sparkNetwork: 'REGTEST', liquidNetwork: 'testnet', rgbProxyEndpoint: 'rpcs://proxy.iriswallet.com/0.2/json-rpc' },
 } as const
 
 type KaleidoNetwork = keyof typeof NETWORK_PRESETS
@@ -48,6 +52,12 @@ const preset = NETWORK_PRESETS[NETWORK]
 
 const WDK_SEED    = process.env.WDK_SEED ?? ''
 const SPARK_NET   = (process.env.SPARK_NETWORK || preset.sparkNetwork) as 'MAINNET' | 'REGTEST'
+const LIQUID_MNEMONIC = process.env.LIQUID_MNEMONIC || WDK_SEED
+const LIQUID_NET  = (process.env.LIQUID_NETWORK || preset.liquidNetwork).toLowerCase() as 'mainnet' | 'testnet' | 'regtest'
+if (!['mainnet', 'testnet', 'regtest'].includes(LIQUID_NET)) {
+  process.stderr.write(`[kaleido-mcp] Fatal: LIQUID_NETWORK must be one of mainnet, testnet, regtest (got "${process.env.LIQUID_NETWORK}")\n`)
+  process.exit(1)
+}
 const RLN_URL     = process.env.RLN_NODE_URL || 'http://localhost:3001'
 const KALEIDO_URL = process.env.KALEIDOSWAP_API_URL || process.env.KALEIDO_API_URL || preset.kaleidoswapApiUrl
 const RGB_PROXY   = process.env.RGB_PROXY_ENDPOINT || preset.rgbProxyEndpoint
@@ -70,9 +80,12 @@ async function main() {
     rlnNodeUrl: RLN_URL,
     kaleidoswapApiUrl: KALEIDO_URL,
     rgbProxyEndpoint: RGB_PROXY,
+    liquidMnemonic: LIQUID_MNEMONIC,
+    liquidNetwork: LIQUID_NET,
+    liquidEsploraUrl: process.env.LIQUID_ESPLORA_URL,
   })
 
-  const label = `${NETWORK}: Spark(${WDK_SEED ? SPARK_NET : 'disabled'}) + RLN(${RLN_URL}) + KaleidoSwap(${KALEIDO_URL})`
+  const label = `${NETWORK}: Spark(${WDK_SEED ? SPARK_NET : 'disabled'}) + Liquid(${LIQUID_MNEMONIC ? LIQUID_NET : 'disabled'}) + RLN(${RLN_URL}) + KaleidoSwap(${KALEIDO_URL})`
 
   if (PORT) {
     const AUTH_TOKEN = process.env.MCP_AUTH_TOKEN ?? null
