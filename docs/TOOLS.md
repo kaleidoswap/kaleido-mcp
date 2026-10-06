@@ -32,7 +32,7 @@
 | `wdk_list_assets` | `schemas`? | List all RGB assets held by the RLN node (NIA, UDA, CFA schemas). Returns asset_id, ticker, name, precision. |
 | `wdk_get_address` | — | Get RLN node on-chain BTC address for receiving Bitcoin deposits. |
 | `wdk_create_rgb_invoice` | `asset_id`?, `amount`?, `duration_seconds`?, `transport_endpoints`? | Create an RGB invoice to receive an RGB asset (USDT, XAUT) on-chain. Share the invoice with the sender; they pay it with wdk_send_asset using the returned recipient_id. |
-| `wdk_create_ln_invoice` | `amount_sats`?, `description`?, `expiry_sec`? | Create a BOLT11 Lightning invoice to receive BTC via Lightning Network into the RLN node. |
+| `wdk_create_ln_invoice` | `amount_sats`?, `amount_msat`?, `description`?, `expiry_sec`? | Create a BOLT11 Lightning invoice to receive BTC via Lightning Network into the RLN node. |
 | `wdk_pay_invoice` | `invoice` | Pay a BOLT11 Lightning invoice from the RLN node. Pass the exact full invoice in the required invoice field. |
 | `wdk_send_btc` | `address`, `amount_sat`, `fee_rate`? | Send BTC on-chain from the RLN node. |
 | `wdk_send_asset` | `asset_id`, `recipient_id`, `amount`, `transport_endpoints`?, `fee_rate`? | Send an RGB asset (USDT/XAUT) on-chain. Pass the recipient_id from the receiver RGB invoice (wdk_create_rgb_invoice on their side). |

@@ -126,14 +126,17 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTr
     'Create a BOLT11 Lightning invoice to receive BTC via Lightning Network into the RLN node.',
     {
       amount_sats: z.number().int().positive().optional().describe('Amount in satoshis. Omit for any-amount.'),
+      amount_msat: z.number().int().positive().optional().describe('Amount in millisatoshis, instead of amount_sats'),
       description: z.string().optional(),
       expiry_sec: z.number().int().positive().optional().describe('Expiry in seconds (default: 3600)'),
     },
-    async ({ amount_sats, description, expiry_sec }: { amount_sats?: number; description?: string; expiry_sec?: number }) =>
-      t(JSON.stringify(await rln.createLNInvoice({
-        amt_msat: amount_sats === undefined ? undefined : amount_sats * 1000,
+    async ({ amount_sats, amount_msat, expiry_sec }: { amount_sats?: number; amount_msat?: number; description?: string; expiry_sec?: number }) => {
+      if (amount_sats !== undefined && amount_msat !== undefined) return fail('pass amount_sats or amount_msat, not both')
+      return t(JSON.stringify(await rln.createLNInvoice({
+        amt_msat: amount_sats !== undefined ? amount_sats * 1000 : amount_msat,
         expiry_sec: expiry_sec ?? 3600,
-      }), null, 2)),
+      }), null, 2))
+    },
   )
 
   // -----------------------------------------------------------------------
