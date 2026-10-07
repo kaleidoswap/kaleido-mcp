@@ -31,9 +31,9 @@
 | Tool | Parameters | Description |
 | --- | --- | --- |
 | `wdk_get_node_info` | — | Get RLN node identity: pubkey, channel count, Lightning balance, peers. Call first to confirm node is reachable. |
-| `wdk_get_balances` | `skip_sync`? | Get RLN wallet balances: BTC on-chain (vanilla/colored UTXOs) and Lightning balance. For RGB asset balances use rln_get_asset_balance. |
+| `wdk_get_balances` | `skip_sync`? | Get RLN wallet balances: BTC on-chain (vanilla/colored UTXOs) and Lightning balance. RGB asset balances come from rln_list_assets. |
 | `wdk_get_asset_balance` | `asset_id` | Get balance of a specific RGB asset (USDT, XAUT) by asset_id. Returns settled, future, spendable, and off-chain amounts. |
-| `wdk_list_assets` | `schemas`? | List all RGB assets held by the RLN node (NIA, UDA, CFA schemas). Returns asset_id, ticker, name, precision. |
+| `wdk_list_assets` | `schemas`? | List all RGB assets held by the RLN node (NIA, UDA, CFA schemas) with their balances. Returns asset_id, ticker, name, precision and balance { settled, future, spendable, offchain_outbound, offchain_inbound } in raw units (display = raw / 10^precision), so one call answers "what do I hold". |
 | `wdk_get_address` | — | Get RLN node on-chain BTC address for receiving Bitcoin deposits. |
 | `wdk_create_rgb_invoice` | `asset_id`?, `amount`?, `duration_seconds`?, `transport_endpoints`? | Create an RGB invoice to receive an RGB asset (USDT, XAUT) on-chain. Share the invoice with the sender; they pay it with wdk_send_asset using the returned recipient_id. |
 | `wdk_create_ln_invoice` | `amount_sats`?, `amount_msat`?, `description`?, `expiry_sec`? | Create a BOLT11 Lightning invoice to receive BTC via Lightning Network into the RLN node. |

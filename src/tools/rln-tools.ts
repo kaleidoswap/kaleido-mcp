@@ -42,7 +42,7 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTr
   // -----------------------------------------------------------------------
   registerAliases(
     ['wdk_get_balances', 'rln_get_balances'],
-    'Get RLN wallet balances: BTC on-chain (vanilla/colored UTXOs) and Lightning balance. For RGB asset balances use rln_get_asset_balance.',
+    'Get RLN wallet balances: BTC on-chain (vanilla/colored UTXOs) and Lightning balance. RGB asset balances come from rln_list_assets.',
     { skip_sync: z.boolean().optional().describe('Skip blockchain sync for faster response (default: false)') },
     async ({ skip_sync = false }: { skip_sync?: boolean }) => {
       const [btc, node] = await Promise.all([rln.getBtcBalance(skip_sync), rln.getNodeInfo()])
@@ -70,7 +70,7 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTr
   // -----------------------------------------------------------------------
   registerAliases(
     ['wdk_list_assets', 'rln_list_assets'],
-    'List all RGB assets held by the RLN node (NIA, UDA, CFA schemas). Returns asset_id, ticker, name, precision.',
+    'List all RGB assets held by the RLN node (NIA, UDA, CFA schemas) with their balances. Returns asset_id, ticker, name, precision and balance { settled, future, spendable, offchain_outbound, offchain_inbound } in raw units (display = raw / 10^precision), so one call answers "what do I hold".',
     { schemas: z.array(z.enum(['Nia', 'Uda', 'Cfa'])).optional() },
     async ({ schemas = [] }: { schemas?: Array<'Nia' | 'Uda' | 'Cfa'> }) => {
       const assets = await rln.listAssets(schemas.map(schema => AssetSchema[schema]))
