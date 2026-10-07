@@ -311,3 +311,68 @@ test('submarine swap tools read the /v2 maker and never fund an unknown swap', {
   }
   assert.ok(!seen.some(r => r.startsWith('POST')), `no swap may be created: ${seen.join(', ')}`)
 })
+
+test('send and invoice tools accept a ticker in place of the asset_id', async () => {
+  const { createServer } = await import('node:http')
+  const bodies = []
+  const assets = {
+    nia: [
+      { asset_id: 'rgb:usdt', ticker: 'USDT', name: 'Tether USD', precision: 6 },
+      { asset_id: 'rgb:dup1', ticker: 'DUP', name: 'Dup One', precision: 0 },
+      { asset_id: 'rgb:dup2', ticker: 'DUP', name: 'Dup Two', precision: 0 },
+    ],
+    uda: [],
+    cfa: [{ asset_id: 'rgb:art', name: 'Artwork', precision: 0 }],
+  }
+  const rln = createServer((req, res) => {
+    let raw = ''
+    req.on('data', c => { raw += c })
+    req.on('end', () => {
+      bodies.push({ url: req.url, body: raw ? JSON.parse(raw) : null })
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(req.url === '/listassets'
+        ? assets
+        : req.url === '/sendrgb'
+          ? { txid: 'tx1' }
+          : { invoice: 'rgb:inv', recipient_id: 'utxob:test', expiration_timestamp: 1, batch_transfer_idx: 0 }))
+    })
+  })
+  await new Promise(r => rln.listen(0, '127.0.0.1', r))
+  const RLN_NODE_URL = `http://127.0.0.1:${rln.address().port}`
+
+  try {
+    await withClient({ cwd, env: { KALEIDO_NETWORK: 'signet', RLN_NODE_URL } }, async client => {
+      const call = async (name, args) => {
+        const res = await client.callTool({ name, arguments: args })
+        return { isError: res.isError === true, body: JSON.parse(res.content[0].text) }
+      }
+
+      const sent = await call('wdk_send_asset', { asset_id: 'usdt', recipient_id: 'utxob:r', amount: 1.5 })
+      assert.equal(sent.isError, false)
+      assert.equal(sent.body.asset_id, 'rgb:usdt')
+      assert.equal(sent.body.amount_raw, 1_500_000)
+
+      const inv = await call('rln_create_rgb_invoice', { asset_id: 'Artwork' })
+      assert.equal(inv.body.asset_id, 'rgb:art')
+
+      const byId = await call('wdk_create_rgb_invoice', { asset_id: 'rgb:other' })
+      assert.equal(byId.body.asset_id, 'rgb:other')
+
+      const unknown = await call('wdk_send_asset', { asset_id: 'NOPE', recipient_id: 'utxob:r', amount: 1 })
+      assert.equal(unknown.isError, true)
+      assert.match(unknown.body.error, /ticker NOPE matches no asset/)
+
+      const ambiguous = await call('wdk_create_rgb_invoice', { asset_id: 'dup' })
+      assert.equal(ambiguous.isError, true)
+      assert.match(ambiguous.body.error, /ticker dup matches 2 assets: rgb:dup1, rgb:dup2; pass the asset_id/)
+    })
+  } finally {
+    rln.close()
+  }
+
+  const sends = bodies.filter(b => b.url === '/sendrgb')
+  assert.equal(sends.length, 1)
+  assert.deepEqual(Object.keys(sends[0].body.recipient_map), ['rgb:usdt'])
+  const invoices = bodies.filter(b => b.url === '/rgbinvoice').map(b => b.body.asset_id)
+  assert.deepEqual(invoices, ['rgb:art', 'rgb:other'])
+})
