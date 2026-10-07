@@ -28,6 +28,24 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTr
     for (const name of names) server.tool(name, description, schema, handler)
   }
 
+  type Asset = { asset_id: string; ticker?: string | null; name?: string | null; precision?: number }
+  const listAllAssets = async (): Promise<Asset[]> => {
+    const assets = await rln.listAssets([])
+    return [...(assets.nia ?? []), ...(assets.uda ?? []), ...(assets.cfa ?? [])] as Asset[]
+  }
+  /** An `rgb:` id passes through; anything else is a ticker (or, failing that, a CFA name) on this node. */
+  const resolveAsset = async (assetOrTicker: string, all?: Asset[]): Promise<{ asset_id: string } | { error: string }> => {
+    const value = assetOrTicker.trim()
+    if (value.startsWith('rgb:')) return { asset_id: value }
+    const assets = all ?? await listAllAssets()
+    const key = value.toLowerCase()
+    let matches = assets.filter(a => a.ticker?.toLowerCase() === key)
+    if (!matches.length) matches = assets.filter(a => !a.ticker && a.name?.toLowerCase() === key)
+    if (matches.length === 1) return { asset_id: matches[0].asset_id }
+    if (!matches.length) return { error: `ticker ${value} matches no asset on this node; pass the asset_id (see rln_list_assets)` }
+    return { error: `ticker ${value} matches ${matches.length} assets: ${matches.map(a => a.asset_id).join(', ')}; pass the asset_id` }
+  }
+
   // -----------------------------------------------------------------------
   registerAliases(
     ['wdk_get_node_info', 'rln_get_node_info'],
@@ -94,14 +112,20 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTr
   // -----------------------------------------------------------------------
   registerAliases(
     ['wdk_create_rgb_invoice', 'rln_create_rgb_invoice'],
-    'Create an RGB invoice to receive an RGB asset (USDT, XAUT) on-chain. Share the invoice with the sender; they pay it with wdk_send_asset using the returned recipient_id.',
+    'Create an RGB invoice to receive an RGB asset (USDT, XAUT) on-chain. asset_id takes the asset ID or its ticker. Share the invoice with the sender; they pay it with wdk_send_asset using the returned recipient_id.',
     {
-      asset_id: z.string().optional().describe('RGB asset ID. Omit for any asset.'),
+      asset_id: z.string().optional().describe("RGB asset ID ('rgb:...') or ticker (e.g. 'USDT'). Omit for any asset."),
       amount: z.number().positive().optional().describe('Expected amount in display units (e.g. 65.5 for 65.5 USDT)'),
       duration_seconds: z.number().int().positive().optional().describe('Invoice expiry (default: 86400 = 24h)'),
       transport_endpoints: z.array(z.string()).optional().describe('RGB proxy endpoints the payer posts the consignment to. Defaults to the network RGB proxy (RGB_PROXY_ENDPOINT).'),
     },
-    async ({ asset_id, amount, duration_seconds, transport_endpoints }: { asset_id?: string; amount?: number; duration_seconds?: number; transport_endpoints?: string[] }) => {
+    async ({ asset_id: assetOrTicker, amount, duration_seconds, transport_endpoints }: { asset_id?: string; amount?: number; duration_seconds?: number; transport_endpoints?: string[] }) => {
+      let asset_id: string | undefined
+      if (assetOrTicker) {
+        const resolved = await resolveAsset(assetOrTicker)
+        if ('error' in resolved) return fail(resolved.error)
+        asset_id = resolved.asset_id
+      }
       const invoice = await rln.createRgbInvoice({
         ...(asset_id ? { asset_id } : {}),
         ...(amount !== undefined ? { assignment: toFungibleAssignment(amount) } : {}),
@@ -113,6 +137,7 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTr
         witness: false,
       })
       return t(JSON.stringify({
+        ...(asset_id ? { asset_id } : {}),
         invoice: invoice.invoice,
         recipient_id: invoice.recipient_id,
         expires_at: invoice.expiration_timestamp ? new Date(invoice.expiration_timestamp * 1000).toISOString() : null,
@@ -165,16 +190,16 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTr
   // -----------------------------------------------------------------------
   registerAliases(
     ['wdk_send_asset', 'rln_send_asset'],
-    'Send an RGB asset (USDT/XAUT) on-chain. Pass the recipient_id from the receiver RGB invoice (wdk_create_rgb_invoice on their side).',
+    'Send an RGB asset (USDT/XAUT) on-chain. asset_id takes the asset ID or its ticker. Pass the recipient_id from the receiver RGB invoice (wdk_create_rgb_invoice on their side).',
     {
-      asset_id: z.string().describe('RGB asset ID'),
+      asset_id: z.string().describe("RGB asset ID ('rgb:...') or ticker (e.g. 'USDT')"),
       recipient_id: z.string().describe('Recipient identifier from an RGB invoice'),
       amount: z.number().positive().describe('Amount in display units (e.g. 65.5 for USDT)'),
       transport_endpoints: z.array(z.string()).optional().describe('RGB proxy endpoints from the receiver invoice. Defaults to the network RGB proxy (RGB_PROXY_ENDPOINT).'),
       fee_rate: z.number().positive().optional(),
     },
     async ({
-      asset_id,
+      asset_id: assetOrTicker,
       recipient_id,
       amount,
       transport_endpoints,
@@ -186,8 +211,10 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTr
       transport_endpoints?: string[]
       fee_rate?: number
     }) => {
-      const assets = await rln.listAssets([])
-      const all = [...(assets.nia ?? []), ...(assets.uda ?? []), ...(assets.cfa ?? [])]
+      const all = await listAllAssets()
+      const resolved = await resolveAsset(assetOrTicker, all)
+      if ('error' in resolved) return fail(resolved.error)
+      const { asset_id } = resolved
       const precision = all.find(a => a.asset_id === asset_id)?.precision ?? 0
       const rawAmount = Math.round(amount * Math.pow(10, precision))
       const result = await rln.sendRgb({

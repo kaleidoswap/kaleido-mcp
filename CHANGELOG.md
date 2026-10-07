@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor bumps may break).
 
+## [0.4.1] - 2026-10-07
+
+### Changed
+
+- `wdk_send_asset` / `rln_send_asset` and `wdk_create_rgb_invoice` / `rln_create_rgb_invoice` accept a ticker
+  (e.g. `USDT`, case-insensitive) in `asset_id`, resolved against the node's assets; a CFA asset, which has no
+  ticker, matches by name. A value starting with `rgb:` is used as the asset ID. No match, or more than one, returns
+  an error listing the candidates. The invoice result now echoes the resolved `asset_id`.
+
 ## [0.4.0] - 2026-10-07
 
 ### Added
