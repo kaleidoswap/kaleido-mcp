@@ -376,3 +376,91 @@ test('send and invoice tools accept a ticker in place of the asset_id', async ()
   const invoices = bodies.filter(b => b.url === '/rgbinvoice').map(b => b.body.asset_id)
   assert.deepEqual(invoices, ['rgb:art', 'rgb:other'])
 })
+
+test('LSP tools: get_order sends the access_token, orders expose amount_due_sat, quotes are in sats', async () => {
+  const { createServer } = await import('node:http')
+  const USDT = 'rgb:usdt'
+  const calls = []
+  const order = (extra = {}) => ({
+    order_id: 'ord-1', order_state: 'CREATED', access_token: 'tok-1', token: '',
+    client_pubkey: '02ab', lsp_balance_sat: 50_000, client_balance_sat: 4_000,
+    required_channel_confirmations: 0, funding_confirms_within_blocks: 6, channel_expiry_blocks: 13_140, announce_channel: false,
+    payment: {
+      bolt11: { state: 'EXPECT_PAYMENT', expires_at: '2026-10-07T12:00:00Z', fee_total_sat: 2_972, order_total_sat: 6_972, invoice: 'lntbs1invoice' },
+      onchain: { state: 'EXPECT_PAYMENT', expires_at: '2026-10-07T12:00:00Z', fee_total_sat: 2_972, order_total_sat: 6_972, address: 'tb1qpay', min_fee_for_0conf: 2, min_onchain_payment_confirmations: 1 },
+    },
+    ...extra,
+  })
+  const routes = {
+    '/api/v1/lsps1/get_info': () => ({ lsp_connection_url: '02lsp@host:9735', options: { min_channel_balance_sat: 50_000, max_channel_balance_sat: 1_000_000, max_channel_expiry_blocks: 30_160, min_required_channel_confirmations: 0, min_funding_confirms_within_blocks: 0 }, assets: [{ ticker: 'USDT', asset_id: USDT, precision: 6 }] }),
+    '/api/v1/market/assets': () => ({ assets: [{ ticker: 'USDT', asset_id: USDT, precision: 6, protocol_ids: { RGB: USDT } }] }),
+    '/api/v1/market/quote': () => ({ rfq_id: 'rfq-1', from_asset: { asset_id: 'BTC', layer: 'BTC_LN', amount: 1_223_000, precision: 11 }, to_asset: { asset_id: USDT, layer: 'RGB_LN', amount: 1_000_000, precision: 6 }, expires_at: 1_791_405_649 }),
+    '/api/v1/lsps1/estimate_fees': () => ({ setup_fee: 1_000, capacity_fee: 500, duration_fee: 1_314, total_fee: 7_826 }),
+    '/api/v1/lsps1/create_order': body => order(body.rfq_id ? { client_balance_sat: 0, asset_id: USDT, lsp_asset_amount: 1_000_000, client_asset_amount: 1_000_000, rfq_id: body.rfq_id, asset_price_sat: 1_223, payment: { bolt11: { state: 'EXPECT_PAYMENT', expires_at: 'x', fee_total_sat: 7_826, order_total_sat: 9_049, invoice: 'lntbs1asset' }, onchain: { state: 'EXPECT_PAYMENT', expires_at: 'x', fee_total_sat: 7_826, order_total_sat: 9_049, address: 'tb1qasset', min_fee_for_0conf: 2, min_onchain_payment_confirmations: 1 } } } : {}),
+    '/api/v1/lsps1/get_order': () => order({ order_state: 'COMPLETED', channel: { channel_id: 'ch-1' } }),
+    '/nodeinfo': () => ({ pubkey: '02client' }),
+    '/address': () => ({ address: 'tb1qrefund' }),
+  }
+  const srv = createServer((req, res) => {
+    let raw = ''
+    req.on('data', c => { raw += c })
+    req.on('end', () => {
+      const body = raw ? JSON.parse(raw) : null
+      calls.push({ url: req.url, body })
+      const route = routes[req.url]
+      res.writeHead(route ? 200 : 404, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(route ? route(body) : { detail: 'not found' }))
+    })
+  })
+  await new Promise(r => srv.listen(0, '127.0.0.1', r))
+  const url = `http://127.0.0.1:${srv.address().port}`
+
+  try {
+    await withClient({ cwd, env: { KALEIDO_NETWORK: 'signet', KALEIDOSWAP_API_URL: url, RLN_NODE_URL: url } }, async client => {
+      const tools = (await client.listTools()).tools
+      const getOrder = tools.find(t => t.name === 'kaleidoswap_lsp_get_order')
+      assert.deepEqual(getOrder.inputSchema.required?.sort(), ['access_token', 'order_id'])
+      const call = async (name, args) => {
+        const res = await client.callTool({ name, arguments: args })
+        assert.notEqual(res.isError, true, res.content[0].text)
+        return JSON.parse(res.content[0].text)
+      }
+
+      const created = await call('kaleidoswap_lsp_create_order', { client_pubkey: '02ab', lsp_balance_sat: 50_000, client_balance_sat: 4_000, channel_expiry_blocks: 13_140 })
+      assert.equal(created.access_token, 'tok-1')
+      assert.equal(created.amount_due_sat, 6_972)
+      assert.equal(created.fee_sat, 2_972)
+      assert.equal(created.payment.onchain.amount_sat, 6_972)
+      assert.equal(created.payment.onchain.address, 'tb1qpay')
+      assert.equal(created.payment.bolt11.amount_sat, 6_972)
+      assert.equal(created.payment.bolt11.invoice, 'lntbs1invoice')
+      for (const k of ['onchain_amount_sat', 'order_total_sat', 'fee_total_sat', 'bolt11_invoice', 'onchain_address', 'token']) assert.equal(k in created, false, k)
+      assert.equal('fee_total_sat' in created.payment.onchain, false)
+      assert.match(created.instruction, /amount_due_sat/)
+
+      const polled = await call('kaleidoswap_lsp_get_order', { order_id: 'ord-1', access_token: 'tok-1' })
+      assert.equal(polled.order_state, 'COMPLETED')
+      assert.equal(polled.amount_due_sat, 6_972)
+      assert.deepEqual(calls.find(c => c.url === '/api/v1/lsps1/get_order').body, { order_id: 'ord-1', access_token: 'tok-1' })
+
+      const quote = await call('kaleidoswap_lsp_quote_asset_channel', { asset: 'USDT', asset_amount: 1 })
+      assert.equal(quote.btc_amount_sat, 1_223)
+      assert.equal(quote.channel_fee_sat, 7_826)
+      assert.equal(quote.total_sat, 9_049)
+      assert.deepEqual(quote.fee_breakdown, { setup_fee_sat: 1_000, capacity_fee_sat: 500, duration_fee_sat: 1_314, other_fee_sat: 5_012 })
+      const est = calls.find(c => c.url === '/api/v1/lsps1/estimate_fees').body
+      assert.equal(est.client_asset_amount, 1_000_000)
+      assert.equal(est.rfq_id, 'rfq-1')
+
+      const asset = await call('kaleidoswap_lsp_create_asset_channel', { asset: 'USDT', asset_amount: 1, rfq_id: 'rfq-1' })
+      assert.equal(asset.amount_due_sat, 9_049)
+      assert.equal(asset.fee_sat, 7_826)
+      assert.equal(asset.asset_price_sat, 1_223)
+      assert.equal(asset.access_token, 'tok-1')
+      assert.equal(asset.payment.onchain.amount_sat, 9_049)
+      assert.equal(quote.total_sat, asset.amount_due_sat)
+    })
+  } finally {
+    srv.close()
+  }
+})
