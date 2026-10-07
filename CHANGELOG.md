@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor bumps may break).
 
+## [0.4.2] - 2026-10-07
+
+### Fixed
+
+- `kaleidoswap_lsp_get_order` takes a required `access_token` and sends it to the maker. Without it every poll
+  failed with "Invalid order access token".
+- `kaleidoswap_lsp_create_order` returned a flat `onchain_amount_sat` that held only the fee, so paying it underpaid
+  the order. The amount to pay is now `amount_due_sat` (the maker's `order_total_sat`: fee + `client_balance_sat`
+  + `asset_price_sat`), with the fee alone in `fee_sat`.
+- `kaleidoswap_lsp_quote_asset_channel` returned `btc_amount_sat` in msat; it is now in sats. `channel_fee_sat` was
+  always null because the tool read a field the maker does not return; it is now the estimate's `total_fee`, priced
+  with the same `client_asset_amount` the order sends, so `total_sat` matches the order's `amount_due_sat`. The
+  estimate no longer needs the node pubkey. A failed estimate leaves `total_sat` null and sets `fee_error`.
+
+### Changed
+
+- **Breaking result shape** for `kaleidoswap_lsp_create_order`, `kaleidoswap_lsp_get_order` and
+  `kaleidoswap_lsp_create_asset_channel`. They return one normalised order: `order_id`, `order_state`,
+  `access_token`, `amount_due_sat`, `fee_sat`, the accepted balances and asset amounts, `channel`, `failure_reason`,
+  and `payment: { bolt11: { invoice, amount_sat, state, expires_at }, onchain: { address, amount_sat, state,
+  expires_at, ... } }`. Removed: the flat `bolt11_invoice`, `onchain_address`, `onchain_amount_sat`,
+  `order_total_sat`, `fee_total_sat` and the raw order spread; `create_asset_channel`'s `total_sat` is now
+  `amount_due_sat`.
+- `kaleidoswap_lsp_create_order` accepts `refund_onchain_address`; `kaleidoswap_lsp_estimate_fees` accepts
+  `client_asset_amount`, which the maker needs to price an asset purchase. `kaleidoswap_lsp_quote_asset_channel`
+  adds `fee_breakdown` (setup, capacity, duration, and `other_fee_sat` for the asset fee the API does not itemise); `kaleidoswap_lsp_get_info` lists each asset's `precision`. LSP tool descriptions state units
+  (sats, raw asset units).
+
 ## [0.4.1] - 2026-10-07
 
 ### Changed
