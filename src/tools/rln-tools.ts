@@ -427,7 +427,8 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTr
         schema,
         asset_id: asset.asset_id ?? null,
         name: asset.name ?? name,
-        ticker: asset.ticker ?? ticker ?? null,
+        // CFA assets have no ticker: never echo one the caller passed.
+        ticker: schema === 'CFA' ? null : (asset.ticker ?? ticker ?? null),
         precision: asset.precision ?? precision,
         issued_supply_raw: asset.issued_supply ?? rawAmount,
       }, null, 2))
@@ -437,7 +438,7 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTr
   // -----------------------------------------------------------------------
   registerAliases(
     ['wdk_list_transfers', 'rln_list_transfers'],
-    'List RGB transfers for one asset (issuance, sends, receives) with their status (WaitingCounterparty, WaitingConfirmations, Settled, Failed). Use it to check whether an RGB invoice has been paid.',
+    'List RGB transfers for one asset (issuance, sends, receives) with their status (WaitingCounterparty, WaitingConfirmations, Settled, Failed). Use it to check whether an RGB invoice has been paid. `amount_raw` is the requested / received / issued amount; it is null for sends, whose `assignments_raw` may include change.',
     { asset_id: z.string().describe('RGB asset ID') },
     async ({ asset_id }: { asset_id: string }) => {
       const { transfers } = await rln.listTransfers({ asset_id })
@@ -445,7 +446,8 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTr
         idx: tr.idx,
         kind: tr.kind,
         status: tr.status,
-        amount_raw: assignmentValue(tr.requested_assignment) ?? assignmentValue(tr.assignments?.[0]) ?? null,
+        amount_raw: transferAmount(tr),
+        assignments_raw: (tr.assignments ?? []).map(assignmentValue).filter((v): v is number => v !== undefined),
         txid: tr.txid ?? null,
         recipient_id: tr.recipient_id ?? null,
         created_at: tr.created_at,
@@ -528,4 +530,16 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTr
 const t = (content: string) => ({ content: [{ type: 'text' as const, text: content }] })
 const assignmentValue = (a: unknown): number | undefined =>
   a && typeof a === 'object' && 'value' in a ? (a as { value: number }).value : undefined
+/**
+ * The transferred amount, only where it is unambiguous: the requested amount, or the
+ * sum of what this node received/issued. For a Send the assignments can include our
+ * own change, so amount_raw stays null and the caller reads assignments_raw instead.
+ */
+const transferAmount = (tr: { kind?: string; requested_assignment?: unknown; assignments?: unknown[] }): number | null => {
+  const requested = assignmentValue(tr.requested_assignment)
+  if (requested !== undefined) return requested
+  if (tr.kind === 'Send' || !tr.assignments?.length) return null
+  const values = tr.assignments.map(assignmentValue).filter((v): v is number => v !== undefined)
+  return values.length ? values.reduce((a, b) => a + b, 0) : null
+}
 const fail = (message: string) => ({ ...t(JSON.stringify({ error: message }, null, 2)), isError: true })
