@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Submarine swaps on the Boltz `/v2` maker (kaleidoswap-maker-rs): pay a Lightning invoice from L-USDT or L-BTC on
+  Liquid. `kaleidoswap_submarine_pairs`, `kaleidoswap_submarine_create`, `kaleidoswap_submarine_fund` (spend; takes only
+  the swap id) and `kaleidoswap_submarine_status`, through the optional peer `@kaleidorg/swap-sdk` (Node ≥ 22). Refund
+  keys derive from the wallet mnemonic; swap records are persisted in `KALEIDOSWAP_SWAP_DIR` before funding. New
+  settings: `KALEIDOSWAP_MAKER_URL`, `KALEIDOSWAP_SWAP_DIR`.
+
 ### Fixed
 
 - `wdk_issue_asset` / `rln_issue_asset` no longer echo a `ticker` for CFA assets, which have none.

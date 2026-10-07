@@ -42,6 +42,11 @@ const LIQUID_TOOLS = [
   'liquid_send_btc', 'liquid_send_asset', 'liquid_get_fee_rates',
 ]
 
+const SUBMARINE_TOOLS = [
+  'kaleidoswap_submarine_pairs', 'kaleidoswap_submarine_create',
+  'kaleidoswap_submarine_fund', 'kaleidoswap_submarine_status',
+]
+
 const REMOVED_TOOLS = [
   'kaleidoswap_place_order',
   'kaleidoswap_get_order_status',
@@ -61,7 +66,7 @@ test('kaleido-mcp includes the canonical focused-server contracts and legacy ali
     },
   })
 
-  assertHasAllTools(tools, [...CORE_TOOLS, ...SPARK_TOOLS, ...LIQUID_TOOLS])
+  assertHasAllTools(tools, [...CORE_TOOLS, ...SPARK_TOOLS, ...LIQUID_TOOLS, ...SUBMARINE_TOOLS])
   for (const name of REMOVED_TOOLS) assert.ok(!tools.includes(name), `${name} should be removed`)
 })
 
@@ -86,7 +91,7 @@ test('Spark invoice tools expose sender/expiry options and reject ambiguous amou
 test('without WDK_SEED the non-Spark tools are still registered', async () => {
   const tools = await listToolNames({ cwd, env: { KALEIDO_NETWORK: 'signet' } })
 
-  assertHasAllTools(tools, CORE_TOOLS)
+  assertHasAllTools(tools, [...CORE_TOOLS, ...SUBMARINE_TOOLS])
   for (const name of SPARK_TOOLS) assert.ok(!tools.includes(name), `${name} should need WDK_SEED`)
   for (const name of LIQUID_TOOLS) assert.ok(!tools.includes(name), `${name} should need LIQUID_MNEMONIC`)
 })
@@ -252,4 +257,57 @@ test('RGB invoices default to the network RGB proxy and honour an explicit overr
     ['rpc://127.0.0.1:3000/json-rpc'],
     ['rpc://proxy.example/json-rpc'],
   ])
+})
+
+const nodeMajor = Number(process.versions.node.split('.')[0])
+
+test('submarine swap tools read the /v2 maker and never fund an unknown swap', { skip: nodeMajor < 22 && '@kaleidorg/swap-sdk needs Node >= 22' }, async () => {
+  const { createServer } = await import('node:http')
+  const { mkdtemp } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const card = {
+    hash: 'ab'.repeat(32), rate: 0.0000116,
+    limits: { minimal: 1000000000, maximal: 87427704073, maximalZeroConf: 0 },
+    fees: { percentage: 0.5, minerFees: 1000 },
+    fromAssetId: '5a'.repeat(32), feeAssetId: '14'.repeat(32),
+  }
+  const seen = []
+  const maker = createServer((req, res) => {
+    seen.push(`${req.method} ${req.url}`)
+    res.writeHead(req.url === '/v2/swap/submarine' ? 200 : 404, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify(req.url === '/v2/swap/submarine' ? { 'L-USDT': { BTC: card } } : { error: 'not found' }))
+  })
+  await new Promise(r => maker.listen(0, '127.0.0.1', r))
+  const env = {
+    KALEIDO_NETWORK: 'signet',
+    KALEIDOSWAP_MAKER_URL: `http://127.0.0.1:${maker.address().port}/v2`,
+    KALEIDOSWAP_SWAP_DIR: await mkdtemp(join(tmpdir(), 'kmcp-swaps-')),
+  }
+
+  try {
+    await withClient({ cwd, env }, async client => {
+      const call = async (name, args) => {
+        const res = await client.callTool({ name, arguments: args })
+        return { isError: res.isError === true, body: JSON.parse(res.content[0].text) }
+      }
+
+      const pairs = await call('kaleidoswap_submarine_pairs', {})
+      assert.equal(pairs.isError, false)
+      assert.deepEqual(pairs.body.pairs.map(p => [p.from, p.to, p.from_asset_id]), [['L-USDT', 'BTC', card.fromAssetId]])
+
+      // No wallet mnemonic → no swap keys → nothing is created at the maker.
+      const created = await call('kaleidoswap_submarine_create', { invoice: 'lntbs1000n1pexample' })
+      assert.equal(created.isError, true)
+      assert.match(created.body.error, /mnemonic/)
+
+      // fund only accepts swaps this server created and persisted.
+      const funded = await call('kaleidoswap_submarine_fund', { swap_id: 'not-ours' })
+      assert.equal(funded.isError, true)
+      assert.match(funded.body.error, /No submarine swap "not-ours"/)
+    })
+  } finally {
+    maker.close()
+  }
+  assert.ok(!seen.some(r => r.startsWith('POST')), `no swap may be created: ${seen.join(', ')}`)
 })
