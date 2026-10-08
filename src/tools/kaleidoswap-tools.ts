@@ -6,6 +6,7 @@ import { z } from 'zod'
 import type { WdkMcpServer } from '@tetherto/wdk-mcp-toolkit'
 import type { MakerClient } from 'kaleido-sdk'
 import { parseSwapstring, preflightError, preflightSwapCapacity, type SwapSides } from './swap-preflight.js'
+import { checkLegAmount, findLegLimit, isBtc, translateMakerRangeError } from './quote-limits.js'
 
 /** Minimal node-client surface this module needs (RlnClient is structurally compatible). */
 interface NodeClientLike {
@@ -47,6 +48,34 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
     return ticker === 'BTC' ? 'BTC_LN' : 'RGB_LN'
   }
 
+  // /market/pairs carries the per-layer min/max used to pre-validate quote amounts.
+  const PAIRS_TTL_MS = 60_000
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let pairsCache: { at: number; pairs: any[] } | undefined
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async function cachedPairs(): Promise<any[]> {
+    if (pairsCache && Date.now() - pairsCache.at < PAIRS_TTL_MS) return pairsCache.pairs
+    const pairs = (await maker.listPairs()).pairs ?? []
+    pairsCache = { at: Date.now(), pairs }
+    return pairs
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function legInfo(asset: any, id: string): { ticker: string; precision: number } {
+    return { ticker: String(asset?.ticker ?? id), precision: asset?.precision ?? (isBtc(asset?.ticker ?? id) ? 11 : 0) }
+  }
+
+  /** Re-throw maker amount-range errors in display units of the leg they name. */
+  async function withRangeErrors<T>(legs: { from: { ticker: string; precision: number }; to: { ticker: string; precision: number } }, fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn()
+    } catch (e) {
+      const translated = translateMakerRangeError(e instanceof Error ? e.message : String(e), legs)
+      if (translated) throw new Error(translated)
+      throw e
+    }
+  }
+
   // -----------------------------------------------------------------------
   server.tool('kaleidoswap_get_assets',
     'List all assets tradeable on KaleidoSwap. Returns ticker, name, precision, and RGB protocol ID for each asset.',
@@ -75,35 +104,53 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
 
   // -----------------------------------------------------------------------
   server.tool('kaleidoswap_get_quote',
-    'Get a price quote for a swap. Returns expected output amount, price, fee, and rfq_id (use in kaleidoswap_atomic_init). Quote expires in ~60s. Specify the amount on exactly one leg: from_amount to SELL a fixed input, or to_amount to BUY a fixed output (e.g. "buy 1 USDT" → to_amount=1). Layers default to BTC_LN for BTC and RGB_LN for RGB assets when omitted.',
+    'Get a price quote for a swap. Returns expected output amount, price, fee, and rfq_id (use in kaleidoswap_atomic_init). Quote expires in ~60s. Amounts are display units of the asset: BTC (not sats), USDT (not micro-units). Specify the amount on exactly one leg: from_amount to SELL a fixed input, or to_amount to BUY a fixed output (e.g. "buy 1 USDT" -> to_asset_id USDT, to_amount 1). Example: "sell 2,500 sats for USDT" -> from_asset_id BTC, from_amount 0.000025, to_asset_id USDT (or from_amount_sat 2500). A BTC leg also accepts the amount in sats via from_amount_sat / to_amount_sat. The amount is checked against the pair limits before the maker is called. Layers default to BTC_LN for BTC and RGB_LN for RGB assets when omitted.',
     {
       from_asset_id: z.string().describe("Asset to sell — ticker ('BTC') or RGB protocol ID ('rgb:...')"),
       to_asset_id: z.string().describe('Asset to buy'),
       from_layer: z.string().optional().describe("Source layer: 'BTC_LN', 'BTC_SPARK', 'RGB_LN'. Optional — derived from the asset when omitted."),
       to_layer: z.string().optional().describe("Destination layer: 'RGB_LN', 'BTC_SPARK', 'BTC_LN'. Optional — derived from the asset when omitted."),
-      from_amount: z.number().positive().optional().describe('Amount to SELL in display units (e.g. 0.001 BTC). Provide either from_amount or to_amount, not both.'),
-      to_amount: z.number().positive().optional().describe('Amount to BUY/receive in display units (e.g. 1.0 USDT). Provide either from_amount or to_amount, not both.'),
+      from_amount: z.number().positive().optional().describe('Amount to SELL in display units of from_asset (BTC, not sats: 2,500 sats = 0.000025). Provide exactly one of from_amount, to_amount, from_amount_sat, to_amount_sat.'),
+      to_amount: z.number().positive().optional().describe('Amount to BUY/receive in display units of to_asset (e.g. 1.5 USDT; BTC, not sats). Provide exactly one amount field.'),
+      from_amount_sat: z.number().int().positive().optional().describe('BTC to SELL, in sats. Only when from_asset_id is BTC; replaces from_amount.'),
+      to_amount_sat: z.number().int().positive().optional().describe('BTC to BUY/receive, in sats. Only when to_asset_id is BTC; replaces to_amount.'),
     },
-    async ({ from_asset_id, to_asset_id, from_layer, to_layer, from_amount, to_amount }) => {
-      if ((from_amount == null) === (to_amount == null)) {
-        throw new Error('Provide exactly one of from_amount (sell) or to_amount (buy).')
+    async ({ from_asset_id, to_asset_id, from_layer, to_layer, from_amount, to_amount, from_amount_sat, to_amount_sat }) => {
+      const given = [from_amount, to_amount, from_amount_sat, to_amount_sat].filter(v => v != null).length
+      if (given !== 1) {
+        throw new Error('Provide exactly one of from_amount (sell), to_amount (buy), from_amount_sat or to_amount_sat (BTC leg in sats).')
       }
-      const [{ assets }, { pairs }] = await Promise.all([maker.listAssets(), maker.listPairs()])
+      const [{ assets }, pairs] = await Promise.all([maker.listAssets(), cachedPairs()])
       const fromAsset = await resolveAsset(from_asset_id, assets, pairs)
       if (!fromAsset) throw new Error(`Unknown asset: ${from_asset_id}`)
       const toAsset = await resolveAsset(to_asset_id, assets, pairs)
       if (!toAsset) throw new Error(`Unknown asset: ${to_asset_id}`)
       const fLayer = from_layer ?? deriveLayer(from_asset_id, fromAsset)
       const tLayer = to_layer ?? deriveLayer(to_asset_id, toAsset)
+      const legs = { from: legInfo(fromAsset, from_asset_id), to: legInfo(toAsset, to_asset_id) }
+      const satsToRaw = (side: 'from' | 'to', sats: number) => {
+        const leg = legs[side]
+        if (!isBtc(leg.ticker)) throw new Error(`${side}_amount_sat is only for a BTC leg; ${side}_asset_id is ${leg.ticker}. Use ${side}_amount in ${leg.ticker}.`)
+        return Math.round(sats * 10 ** (leg.precision - 8))
+      }
       // The maker API takes the amount on exactly one leg (SwapLegInput.amount is
       // optional); the other leg is priced. from_amount → fixed sell, to_amount → fixed buy.
+      const side: 'from' | 'to' = from_amount != null || from_amount_sat != null ? 'from' : 'to'
+      const raw = from_amount != null ? maker.toRaw(from_amount, legs.from.precision)
+        : to_amount != null ? maker.toRaw(to_amount, legs.to.precision)
+        : satsToRaw(side, (from_amount_sat ?? to_amount_sat) as number)
+      const limit = side === 'from'
+        ? findLegLimit(pairs, from_asset_id, to_asset_id, fLayer)
+        : findLegLimit(pairs, to_asset_id, from_asset_id, tLayer)
+      const invalid = checkLegAmount(side, raw, limit, side === 'from' ? legs.to : legs.from)
+      if (invalid) throw new Error(invalid)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const fromLeg: any = { asset_id: from_asset_id, layer: fLayer }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const toLeg: any = { asset_id: to_asset_id, layer: tLayer }
-      if (from_amount != null) fromLeg.amount = maker.toRaw(from_amount, fromAsset.precision)
-      else toLeg.amount = maker.toRaw(to_amount as number, toAsset.precision)
-      const quote = await maker.getQuote({ from_asset: fromLeg, to_asset: toLeg })
+      if (side === 'from') fromLeg.amount = raw
+      else toLeg.amount = raw
+      const quote = await withRangeErrors(legs, () => maker.getQuote({ from_asset: fromLeg, to_asset: toLeg }))
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const toPrecision = toAsset?.precision ?? (quote.to_asset as any).precision
       return t(JSON.stringify({
@@ -175,7 +222,7 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
   }
 
   server.tool('kaleidoswap_atomic_init',
-    'Step 1 of atomic HTLC swap: initiate on KaleidoSwap. Returns swapstring, payment_hash and access_token. Keep the access_token — it is returned only here and kaleidoswap_atomic_status needs it. Use raw integer amounts from quote.from_asset.amount_raw / quote.to_asset.amount_raw. Before contacting the maker it checks your channels: BTC→asset needs outbound (next_outbound_htlc_limit_msat) >= swap amount + the 3,000 sat RGB HTLC minimum and asset inbound >= the amount bought; asset→BTC needs asset outbound >= the amount sold and BTC inbound >= the amount bought + 3,000 sat. A shortfall returns an error with the numbers and nothing is created.',
+    'Step 1 of atomic HTLC swap: initiate on KaleidoSwap. Returns swapstring, payment_hash and access_token. Keep the access_token — it is returned only here and kaleidoswap_atomic_status needs it. Use raw integer amounts from quote.from_asset.amount_raw / quote.to_asset.amount_raw unchanged (not display amounts, not sats); a maker range error is reported in display units. Before contacting the maker it checks your channels: BTC→asset needs outbound (next_outbound_htlc_limit_msat) >= swap amount + the 3,000 sat RGB HTLC minimum and asset inbound >= the amount bought; asset→BTC needs asset outbound >= the amount sold and BTC inbound >= the amount bought + 3,000 sat. A shortfall returns an error with the numbers and nothing is created.',
     {
       rfq_id: z.string(), from_asset_id: z.string(),
       from_amount_raw: z.number().int().positive().describe('Raw integer units from quote'),
@@ -198,6 +245,14 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const res = await maker.initSwap({ rfq_id, from_asset: from_asset_id, from_amount: from_amount_raw, to_asset: to_asset_id, to_amount: to_amount_raw } as any)
+        .catch(async e => {
+          const message = e instanceof Error ? e.message : String(e)
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const assets: any[] = await maker.listAssets().then(r => r.assets ?? [], () => [])
+          const leg = (id: string) => legInfo(findAsset(assets, id) ?? findAsset(assets, id.toUpperCase()), id)
+          const translated = translateMakerRangeError(message, { from: leg(from_asset_id), to: leg(to_asset_id) }, false)
+          throw translated ? new Error(`${translated} Get a new quote with kaleidoswap_get_quote and pass its amount_raw values unchanged.`) : e
+        })
       return t(JSON.stringify(warning ? { ...res, preflight_warning: warning } : res, null, 2))
     })
 

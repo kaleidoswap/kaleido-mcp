@@ -558,3 +558,93 @@ test('LSP order tools state that client_balance_sat is the swap outbound', async
     assert.deepEqual(stale.map(t => t.name), [])
   })
 })
+
+test('kaleidoswap_get_quote checks amounts against pair limits and reports them in display units', async () => {
+  const { createServer } = await import('node:http')
+  const USDT = 'rgb:usdt'
+  const calls = []
+  let quoteError
+  let initError
+  const btc = { ticker: 'BTC', asset_id: 'BTC', precision: 11, protocol_ids: { BTC: 'BTC' }, endpoints: [{ layer: 'BTC_LN', min_amount: 100_000, max_amount: 1_000_000_000, is_active: true }] }
+  const usdt = { ticker: 'USDT', asset_id: USDT, precision: 6, protocol_ids: { RGB: USDT }, endpoints: [{ layer: 'RGB_LN', min_amount: 500_000, max_amount: 1_000_000_000, is_active: true }] }
+  const routes = {
+    '/api/v1/market/assets': () => [200, { assets: [btc, usdt] }],
+    '/api/v1/market/pairs': () => [200, { pairs: [{ base: btc, quote: usdt, routes: [{ from_layer: 'BTC_LN', to_layer: 'RGB_LN' }] }] }],
+    '/api/v1/market/quote': body => quoteError ? [400, { error_code: 'VALIDATION_ERROR', message: quoteError }] : [200, { rfq_id: 'rfq-1', from_asset: { asset_id: 'BTC', ticker: 'BTC', layer: 'BTC_LN', amount: body.from_asset.amount ?? 2_500_000 }, to_asset: { asset_id: USDT, ticker: 'USDT', layer: 'RGB_LN', amount: body.to_asset.amount ?? 1_000_000 }, price: 1, expires_at: 1_791_405_649 }],
+    '/api/v1/swaps/init': () => [400, { error_code: 'VALIDATION_ERROR', message: initError }],
+  }
+  const srv = createServer((req, res) => {
+    let raw = ''
+    req.on('data', c => { raw += c })
+    req.on('end', () => {
+      const body = raw ? JSON.parse(raw) : null
+      calls.push({ url: req.url, body })
+      const [status, out] = routes[req.url]?.(body) ?? [404, { detail: 'not found' }]
+      res.writeHead(status, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(out))
+    })
+  })
+  await new Promise(r => srv.listen(0, '127.0.0.1', r))
+  const url = `http://127.0.0.1:${srv.address().port}`
+  const quoteCalls = () => calls.filter(c => c.url === '/api/v1/market/quote')
+
+  try {
+    // RLN_NODE_URL points at the mock: channels are unreadable, so the init preflight only warns.
+    await withClient({ cwd, env: { KALEIDO_NETWORK: 'signet', KALEIDOSWAP_API_URL: url, RLN_NODE_URL: url } }, async client => {
+      const desc = (await client.listTools()).tools.find(t => t.name === 'kaleidoswap_get_quote').description
+      assert.match(desc, /BTC \(not sats\)/)
+      assert.match(desc, /from_asset_id BTC, from_amount 0\.000025/)
+      const quote = args => client.callTool({ name: 'kaleidoswap_get_quote', arguments: args })
+
+      // 2,500 put on the USDT leg: rejected locally, in USDT, with the sats hint.
+      let res = await quote({ from_asset_id: 'BTC', to_asset_id: 'USDT', to_amount: 2500 })
+      assert.equal(res.isError, true)
+      assert.match(res.content[0].text, /USDT amount must be between 0\.5 USDT and 1,000 USDT \(you asked to receive 2,500 USDT\)/)
+      assert.match(res.content[0].text, /set from_asset_id BTC and from_amount in BTC \(2,500 sats = 0\.000025\)/)
+      assert.equal(quoteCalls().length, 0, 'maker quote must not be called')
+
+      // Sats on the BTC leg.
+      res = await quote({ from_asset_id: 'BTC', to_asset_id: 'USDT', from_amount: 2500 })
+      assert.equal(res.isError, true)
+      assert.match(res.content[0].text, /BTC amount must be between 0\.000001 BTC \(100 sats\) and 0\.01 BTC \(1,000,000 sats\)/)
+      assert.match(res.content[0].text, /Amounts are in BTC, not sats: 2,500 sats = 0\.000025 BTC/)
+
+      // Too small when selling USDT.
+      res = await quote({ from_asset_id: 'USDT', to_asset_id: 'BTC', from_amount: 0.1 })
+      assert.equal(res.isError, true)
+      assert.match(res.content[0].text, /you asked to sell 0\.1 USDT/)
+      assert.equal(quoteCalls().length, 0)
+
+      // from_amount_sat converts to raw BTC units.
+      res = await quote({ from_asset_id: 'BTC', to_asset_id: 'USDT', from_amount_sat: 2500 })
+      assert.notEqual(res.isError, true, res.content[0].text)
+      assert.equal(quoteCalls()[0].body.from_asset.amount, 2_500_000)
+      assert.equal(JSON.parse(res.content[0].text).from_asset.amount_display, 0.000025)
+
+      res = await quote({ from_asset_id: 'BTC', to_asset_id: 'USDT', to_amount_sat: 2500 })
+      assert.equal(res.isError, true)
+      assert.match(res.content[0].text, /to_amount_sat is only for a BTC leg/)
+      res = await quote({ from_asset_id: 'BTC', to_asset_id: 'USDT', from_amount: 0.001, from_amount_sat: 2500 })
+      assert.equal(res.isError, true)
+      assert.match(res.content[0].text, /exactly one of/)
+
+      // Maker range errors on the priced leg are rewritten in that leg's units.
+      quoteError = 'For pair BTC/USDT, the to_amount must be between 500000 and 1000000000 but got 2500000000'
+      res = await quote({ from_asset_id: 'BTC', to_asset_id: 'USDT', from_amount: 0.0001 })
+      assert.equal(res.isError, true)
+      assert.match(res.content[0].text, /USDT amount must be between 0\.5 USDT and 1,000 USDT \(you asked to receive 2,500 USDT\)/)
+      assert.doesNotMatch(res.content[0].text, /500000 and 1000000000/)
+
+      assert.equal(calls.filter(c => c.url === '/api/v1/market/pairs').length, 1, 'pairs are cached')
+
+      // atomic_init: raw-unit maker limits come back in display units.
+      initError = 'For pair BTC/USDT, the from_amount must be between 100000 and 1000000000 but got 2500'
+      res = await client.callTool({ name: 'kaleidoswap_atomic_init', arguments: { rfq_id: 'rfq-1', from_asset_id: 'BTC', from_amount_raw: 2500, to_asset_id: 'USDT', to_amount_raw: 1_000_000 } })
+      assert.equal(res.isError, true)
+      assert.match(res.content[0].text, /BTC amount must be between 0\.000001 BTC \(100 sats\) and 0\.01 BTC \(1,000,000 sats\) \(you asked to sell 0\.000000025 BTC \(2\.5 sats\)\)/)
+      assert.match(res.content[0].text, /pass its amount_raw values unchanged/)
+    })
+  } finally {
+    srv.close()
+  }
+})

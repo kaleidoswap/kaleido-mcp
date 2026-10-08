@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor bumps may break).
 
+## [0.4.4] - 2026-10-08
+
+### Fixed
+
+- `kaleidoswap_get_quote` checks the amount against the pair's per-layer limits from `/market/pairs` (cached for 60
+  s) before calling the maker, and reports the limits in display units of the asset, e.g. "USDT amount must be
+  between 0.5 USDT and 1,000 USDT (you asked to receive 2,500 USDT)". When a sat count looks misplaced the error says
+  how to express it: "set from_asset_id BTC and from_amount in BTC (2,500 sats = 0.000025)". Maker range errors in
+  raw units ("to_amount must be between 500000 and 1000000000") are rewritten the same way.
+- `kaleidoswap_atomic_init` rewrites maker range errors in display units of the leg they name.
+
+### Added
+
+- `kaleidoswap_get_quote` accepts `from_amount_sat` / `to_amount_sat` for a BTC leg as an alternative to
+  `from_amount` / `to_amount` in BTC.
+
+### Changed
+
+- The `kaleidoswap_get_quote` description states that amounts are display units (BTC, not sats) and gives the
+  example "sell 2,500 sats → from_asset_id BTC, from_amount 0.000025".
+
 ## [0.4.3] - 2026-10-08
 
 ### Fixed
