@@ -620,6 +620,9 @@ test('kaleidoswap_get_quote checks amounts against pair limits and reports them 
       assert.notEqual(res.isError, true, res.content[0].text)
       assert.equal(quoteCalls()[0].body.from_asset.amount, 2_500_000)
       assert.equal(JSON.parse(res.content[0].text).from_asset.amount_display, 0.000025)
+      assert.equal(JSON.parse(res.content[0].text).to_asset.asset_id, USDT, 'a ticker input resolves to the RGB id channels report')
+      assert.equal(JSON.parse(res.content[0].text).from_asset.asset_id, 'BTC')
+      assert.equal(quoteCalls()[0].body.to_asset.asset_id, USDT, 'the maker is quoted by RGB id, as atomic_init will send it')
 
       res = await quote({ from_asset_id: 'BTC', to_asset_id: 'USDT', to_amount_sat: 2500 })
       assert.equal(res.isError, true)
@@ -643,6 +646,7 @@ test('kaleidoswap_get_quote checks amounts against pair limits and reports them 
       assert.equal(res.isError, true)
       assert.match(res.content[0].text, /BTC amount must be between 0\.000001 BTC \(100 sats\) and 0\.01 BTC \(1,000,000 sats\) \(you asked to sell 0\.000000025 BTC \(2\.5 sats\)\)/)
       assert.match(res.content[0].text, /pass its amount_raw values unchanged/)
+      assert.equal(calls.filter(c => c.url === '/api/v1/swaps/init').at(-1).body.to_asset, USDT, 'a ticker in atomic_init is sent as the RGB id')
     })
   } finally {
     srv.close()
