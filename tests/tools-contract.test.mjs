@@ -464,3 +464,97 @@ test('LSP tools: get_order sends the access_token, orders expose amount_due_sat,
     srv.close()
   }
 })
+
+test('atomic swap preflight blocks a swap the channels cannot carry before the maker is contacted', async () => {
+  const { createServer } = await import('node:http')
+  const USDT = 'rgb:usdt'
+  const calls = []
+  // The smallest LSP channel: 54,000 sat, 4,000 sat client balance -> 3,000 sat outbound, 10 USDT inbound.
+  const small = { channel_id: 'c1', is_usable: true, ready: true, capacity_sat: 54_000, local_balance_sat: 4_000, outbound_balance_msat: 3_000_000, inbound_balance_msat: 48_340_000, next_outbound_htlc_limit_msat: 3_000_000, next_outbound_htlc_minimum_msat: 3_000_000, asset_id: USDT, asset_local_amount: 0, asset_remote_amount: 10_000_000 }
+  let channels = [small]
+  let channelsFail = false
+  const routes = {
+    '/api/v1/market/assets': () => ({ assets: [{ ticker: 'BTC', precision: 11, protocol_ids: { BTC: 'BTC' } }, { ticker: 'USDT', precision: 6, protocol_ids: { RGB: USDT } }] }),
+    '/api/v1/swaps/init': () => ({ swapstring: 's', payment_hash: 'h', access_token: 'tok' }),
+    '/api/v1/swaps/execute': () => ({ status: 200, message: 'ok' }),
+    '/nodeinfo': () => ({ pubkey: '02client', rgb_htlc_min_msat: 3_000_000 }),
+    '/taker': () => ({}),
+  }
+  const srv = createServer((req, res) => {
+    let raw = ''
+    req.on('data', c => { raw += c })
+    req.on('end', () => {
+      calls.push(req.url)
+      if (req.url === '/listchannels') {
+        res.writeHead(channelsFail ? 500 : 200, { 'Content-Type': 'application/json' })
+        return res.end(JSON.stringify(channelsFail ? { error: 'boom', code: 500 } : { channels }))
+      }
+      const route = routes[req.url]
+      res.writeHead(route ? 200 : 404, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(route ? route() : { detail: 'not found' }))
+    })
+  })
+  await new Promise(r => srv.listen(0, '127.0.0.1', r))
+  const url = `http://127.0.0.1:${srv.address().port}`
+  const HASH = 'a'.repeat(64)
+
+  try {
+    await withClient({ cwd, env: { KALEIDO_NETWORK: 'signet', KALEIDOSWAP_API_URL: url, RLN_NODE_URL: url } }, async client => {
+      const call = (name, args) => client.callTool({ name, arguments: args })
+      const buy = { rfq_id: 'rfq', from_asset_id: 'BTC', from_amount_raw: 2_500_000, to_asset_id: 'USDT', to_amount_raw: 2_000_000 }
+
+      let res = await call('kaleidoswap_atomic_init', buy)
+      assert.equal(res.isError, true)
+      assert.match(res.content[0].text, /Need 2,500 more sat outbound \(have 3,000, swap 2,500 \+ 3,000 sat RGB HTLC minimum\)\. Receive sats over Lightning or buy a channel with a larger client balance\./)
+      assert.ok(!calls.includes('/api/v1/swaps/init'), 'maker init must not be called')
+
+      const swapstring = `2500000/btc/2000000/${USDT}/1999999999/${HASH}`
+      res = await call('kaleidoswap_atomic_execute', { swapstring, taker_pubkey: '02client', payment_hash: HASH })
+      assert.equal(res.isError, true)
+      assert.ok(!calls.includes('/api/v1/swaps/execute'), 'maker execute must not be called')
+      res = await call('wdk_atomic_taker', { swapstring })
+      assert.equal(res.isError, true)
+      assert.ok(!calls.includes('/taker'), 'taker whitelist must not be called')
+
+      // Too much USDT for the 10 USDT inbound.
+      channels = [{ ...small, next_outbound_htlc_limit_msat: 50_000_000 }]
+      res = await call('kaleidoswap_atomic_init', { ...buy, to_amount_raw: 12_000_000 })
+      assert.equal(res.isError, true)
+      assert.match(res.content[0].text, /Need 2 more USDT inbound \(have 10 USDT, swap 12 USDT\)/)
+
+      // Enough outbound and asset inbound: the maker is called.
+      res = await call('kaleidoswap_atomic_init', buy)
+      assert.notEqual(res.isError, true, res.content[0].text)
+      assert.equal(JSON.parse(res.content[0].text).access_token, 'tok')
+      assert.equal(JSON.parse(res.content[0].text).preflight_warning, undefined)
+
+      // Selling USDT: needs asset outbound and BTC inbound >= amount + 3,000 sat.
+      channels = [{ ...small, asset_local_amount: 5_000_000, inbound_balance_msat: 10_000_000 }]
+      res = await call('kaleidoswap_atomic_init', { rfq_id: 'rfq', from_asset_id: USDT, from_amount_raw: 6_000_000, to_asset_id: 'BTC', to_amount_raw: 8_000_000 })
+      assert.equal(res.isError, true)
+      assert.match(res.content[0].text, /Need 1 more USDT outbound \(have 5 USDT, swap 6 USDT\)/)
+      assert.match(res.content[0].text, /Need 1,000 more sat inbound \(have 10,000, swap 8,000 \+ 3,000 sat RGB HTLC minimum\)/)
+
+      // Channels unreadable: warn, do not block.
+      channelsFail = true
+      res = await call('kaleidoswap_atomic_init', buy)
+      assert.notEqual(res.isError, true, res.content[0].text)
+      assert.match(JSON.parse(res.content[0].text).preflight_warning, /Channel capacity not checked/)
+    })
+  } finally {
+    srv.close()
+  }
+})
+
+test('LSP order tools state that client_balance_sat is the swap outbound', async () => {
+  await withClient({ cwd, env: {} }, async client => {
+    const tools = (await client.listTools()).tools
+    for (const name of ['kaleidoswap_lsp_estimate_fees', 'kaleidoswap_lsp_create_order']) {
+      const d = tools.find(t => t.name === name).description
+      assert.match(d, /client_balance_sat is your outbound/)
+      assert.match(d, /X \+ 3,000 sat/)
+    }
+    const stale = tools.filter(t => !t.name.startsWith('rln_') && /\brln_[a-z_]+/.test(t.description))
+    assert.deepEqual(stale.map(t => t.name), [])
+  })
+})

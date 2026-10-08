@@ -1,6 +1,6 @@
 {
   "name": "kaleido-mcp",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Unified MCP server for KaleidoSwap — WDK Spark wallet, Liquid wallet, RLN node, KaleidoSwap DEX, MPP/L402 payments, and 402index discovery in a single server",
   "license": "Apache-2.0",
   "type": "module",

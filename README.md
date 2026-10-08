@@ -189,6 +189,11 @@ tools and 10 Liquid wallet tools (the Liquid ones also come with `LIQUID_MNEMONI
 The swap needs a Lightning channel with the KaleidoSwap node that can carry the asset you receive.
 `kaleidoswap_lsp_quote_asset_channel` and `kaleidoswap_lsp_create_asset_channel` buy one.
 
+Every RGB Lightning HTLC also carries 3,000 sat (the node's `rgb_htlc_min_msat`), so a BTC→asset swap of X sat needs
+X + 3,000 sat of outbound and inbound for the asset bought; an asset→BTC swap of X sat needs the asset as outbound
+and X + 3,000 sat of inbound. `kaleidoswap_atomic_init`, `wdk_atomic_taker` and `kaleidoswap_atomic_execute` check
+this against your channels first and return the shortfall as an error instead of contacting the maker.
+
 ### Submarine swap flow (pay Lightning from Liquid)
 
 These use the new Boltz `/v2`-shaped maker ([kaleidoswap-maker-rs](https://github.com/kaleidoswap/kaleidoswap-maker-rs))
