@@ -5,6 +5,7 @@
 import { z } from 'zod'
 import type { WdkMcpServer } from '@tetherto/wdk-mcp-toolkit'
 import type { MakerClient } from 'kaleido-sdk'
+import { parseSwapstring, preflightError, preflightSwapCapacity, type SwapSides } from './swap-preflight.js'
 
 /** Minimal node-client surface this module needs (RlnClient is structurally compatible). */
 interface NodeClientLike {
@@ -12,6 +13,8 @@ interface NodeClientLike {
   getNodeInfo(): Promise<any>
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getAddress(): Promise<any>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  listChannels(): Promise<any>
 }
 
 export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClient, rln?: NodeClientLike): void {
@@ -148,23 +151,68 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
     })
 
   // -----------------------------------------------------------------------
+  /**
+   * Map init params to taker-side swap sides (BTC in msat, RGB in raw units). Null when an
+   * asset cannot be resolved; the caller then skips the preflight with a warning.
+   */
+  async function initSides(fromId: string, fromRaw: number, toId: string, toRaw: number): Promise<SwapSides | null> {
+    const { assets } = await maker.listAssets()
+    const labels: NonNullable<SwapSides['labels']> = {}
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const side = (id: string, raw: number): { asset: string | null; qty: number } | null => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const a: any = findAsset(assets as any[], id) ?? findAsset(assets as any[], id.toUpperCase())
+      if (String(a?.ticker ?? id).toUpperCase() === 'BTC') return { asset: null, qty: raw * 10 ** (11 - (a?.precision ?? 11)) }
+      const rgb: string | undefined = a?.protocol_ids?.RGB ?? (id.startsWith('rgb:') ? id : undefined)
+      if (!rgb) return null
+      if (a) labels[rgb] = { ticker: a.ticker, precision: a.precision ?? 0 }
+      return { asset: rgb, qty: raw }
+    }
+    const f = side(fromId, fromRaw)
+    const to = side(toId, toRaw)
+    if (!f || !to) return null
+    return { fromAsset: f.asset, fromQty: f.qty, toAsset: to.asset, toQty: to.qty, labels }
+  }
+
   server.tool('kaleidoswap_atomic_init',
-    'Step 1 of atomic HTLC swap: initiate on KaleidoSwap. Returns swapstring, payment_hash and access_token. Keep the access_token — it is returned only here and kaleidoswap_atomic_status needs it. Use raw integer amounts from quote.from_asset.amount_raw / quote.to_asset.amount_raw.',
+    'Step 1 of atomic HTLC swap: initiate on KaleidoSwap. Returns swapstring, payment_hash and access_token. Keep the access_token — it is returned only here and kaleidoswap_atomic_status needs it. Use raw integer amounts from quote.from_asset.amount_raw / quote.to_asset.amount_raw. Before contacting the maker it checks your channels: BTC→asset needs outbound (next_outbound_htlc_limit_msat) >= swap amount + the 3,000 sat RGB HTLC minimum and asset inbound >= the amount bought; asset→BTC needs asset outbound >= the amount sold and BTC inbound >= the amount bought + 3,000 sat. A shortfall returns an error with the numbers and nothing is created.',
     {
       rfq_id: z.string(), from_asset_id: z.string(),
       from_amount_raw: z.number().int().positive().describe('Raw integer units from quote'),
       to_asset_id: z.string(),
       to_amount_raw: z.number().int().positive().describe('Raw integer units from quote'),
     },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async ({ rfq_id, from_asset_id, from_amount_raw, to_asset_id, to_amount_raw }) => t(JSON.stringify(await maker.initSwap({ rfq_id, from_asset: from_asset_id, from_amount: from_amount_raw, to_asset: to_asset_id, to_amount: to_amount_raw } as any), null, 2)))
+    async ({ rfq_id, from_asset_id, from_amount_raw, to_asset_id, to_amount_raw }) => {
+      let warning: string | undefined
+      let sides: SwapSides | null = null
+      try {
+        sides = await initSides(from_asset_id, from_amount_raw, to_asset_id, to_amount_raw)
+        if (!sides) warning = 'Channel capacity not checked: could not resolve the swap assets.'
+      } catch (e) {
+        warning = `Channel capacity not checked: could not list maker assets (${e instanceof Error ? e.message : String(e)}).`
+      }
+      if (sides) {
+        const pre = await preflightSwapCapacity(rln, sides)
+        if (!pre.ok) return preflightError(pre)
+        warning = pre.warning
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res = await maker.initSwap({ rfq_id, from_asset: from_asset_id, from_amount: from_amount_raw, to_asset: to_asset_id, to_amount: to_amount_raw } as any)
+      return t(JSON.stringify(warning ? { ...res, preflight_warning: warning } : res, null, 2))
+    })
 
   // -----------------------------------------------------------------------
   server.tool('kaleidoswap_atomic_execute',
-    'Step 3 of atomic swap: confirm execution after rln_atomic_taker has whitelisted the HTLC. Provide swapstring, payment_hash from kaleidoswap_atomic_init, plus taker_pubkey from rln_get_node_info.',
-    { swapstring: z.string(), taker_pubkey: z.string().describe('Node pubkey from rln_get_node_info'), payment_hash: z.string() },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async ({ swapstring, taker_pubkey, payment_hash }) => t(JSON.stringify(await maker.executeSwap({ swapstring, taker_pubkey, payment_hash } as any), null, 2)))
+    'Step 3 of atomic swap: confirm execution after wdk_atomic_taker has whitelisted the HTLC. Provide swapstring, payment_hash from kaleidoswap_atomic_init, plus taker_pubkey from wdk_get_node_info. Runs the same channel-capacity check as kaleidoswap_atomic_init on the swapstring first.',
+    { swapstring: z.string(), taker_pubkey: z.string().describe('Node pubkey from wdk_get_node_info'), payment_hash: z.string() },
+    async ({ swapstring, taker_pubkey, payment_hash }) => {
+      const sides = parseSwapstring(swapstring)
+      const pre = sides ? await preflightSwapCapacity(rln, sides) : { ok: true as const, warning: 'Channel capacity not checked: could not parse the swapstring.' }
+      if (!pre.ok) return preflightError(pre)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res = await maker.executeSwap({ swapstring, taker_pubkey, payment_hash } as any)
+      return t(JSON.stringify(pre.warning ? { ...res, preflight_warning: pre.warning } : res, null, 2))
+    })
 
   // -----------------------------------------------------------------------
   server.tool('kaleidoswap_atomic_status',
@@ -177,22 +225,22 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
 
   // -----------------------------------------------------------------------
   server.tool('kaleidoswap_lsp_get_info',
-    'Get LSP peer connection info and channel capacity limits. Call first to get lsp_connection_url for rln_connect_peer.',
+    'Get LSP peer connection info and channel capacity limits. Call first to get lsp_connection_url for wdk_connect_peer.',
     {},
     async () => {
       const info = await maker.getLspInfo()
-      return t(JSON.stringify({ lsp_connection_url: info.lsp_connection_url, options: { min_channel_balance_sat: info.options.min_channel_balance_sat, max_channel_balance_sat: info.options.max_channel_balance_sat, max_channel_expiry_blocks: info.options.max_channel_expiry_blocks }, assets: info.assets.map(a => ({ ticker: a.ticker, asset_id: a.asset_id, precision: a.precision })), instruction: 'Use lsp_connection_url with rln_connect_peer before kaleidoswap_lsp_create_order' }, null, 2))
+      return t(JSON.stringify({ lsp_connection_url: info.lsp_connection_url, options: { min_channel_balance_sat: info.options.min_channel_balance_sat, max_channel_balance_sat: info.options.max_channel_balance_sat, max_channel_expiry_blocks: info.options.max_channel_expiry_blocks }, assets: info.assets.map(a => ({ ticker: a.ticker, asset_id: a.asset_id, precision: a.precision })), instruction: 'Use lsp_connection_url with wdk_connect_peer before kaleidoswap_lsp_create_order' }, null, 2))
     })
 
   // -----------------------------------------------------------------------
   server.tool('kaleidoswap_lsp_estimate_fees',
-    'Estimate LSPS1 channel fees in sats: setup_fee + capacity_fee + duration_fee (+ asset fee) = total_fee. total_fee is the fee only; the order also charges client_balance_sat and, when buying an asset, its price. Call before kaleidoswap_lsp_create_order.',
+    'Estimate LSPS1 channel fees in sats: setup_fee + capacity_fee + duration_fee (+ asset fee) = total_fee. total_fee is the fee only; the order also charges client_balance_sat and, when buying an asset, its price. Call before kaleidoswap_lsp_create_order. client_balance_sat is your outbound liquidity, the sats you can spend or swap from the channel; lsp_balance_sat is your inbound. Usable outbound is client_balance_sat minus the channel reserve (at least 1,000 sat; 1% of capacity on larger channels). A BTC→asset swap of X sat sends X + 3,000 sat (the RGB HTLC minimum), so it needs client_balance_sat >= X + 3,000 sat + the reserve; client_balance_sat 4,000 leaves 3,000 sat outbound, which cannot carry any BTC→asset swap. An asset→BTC swap of X sat needs lsp_balance_sat >= X + 3,000 sat.',
     {
       // client_pubkey is optional — the maker prices a fee estimate from the
       // amounts/expiry alone, and recipes estimate BEFORE fetching the pubkey.
       client_pubkey: z.string().optional(),
       lsp_balance_sat: z.number().int().positive().describe('Inbound liquidity on the LSP side, in sats'),
-      client_balance_sat: z.number().int().min(0).describe('Outbound liquidity pushed to you, in sats'),
+      client_balance_sat: z.number().int().min(0).describe('Outbound liquidity pushed to you, in sats: your swap budget (BTC→asset swap needs >= swap + 3,000 sat + reserve)'),
       channel_expiry_blocks: z.number().int().positive(),
       required_channel_confirmations: z.number().int().min(0).optional(),
       funding_confirms_within_blocks: z.number().int().positive().optional(),
@@ -210,11 +258,11 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
 
   // -----------------------------------------------------------------------
   server.tool('kaleidoswap_lsp_create_order',
-    'Request a new Lightning channel from KaleidoSwap LSP (LSPS1). SPEND. Returns order_id, access_token and payment instructions. The amount to pay is amount_due_sat (fee_sat + client_balance_sat), never fee_sat alone. Keep order_id + access_token: kaleidoswap_lsp_get_order needs both. Poll until COMPLETED.',
+    'Request a new Lightning channel from KaleidoSwap LSP (LSPS1). SPEND. Returns order_id, access_token and payment instructions. The amount to pay is amount_due_sat (fee_sat + client_balance_sat), never fee_sat alone. Keep order_id + access_token: kaleidoswap_lsp_get_order needs both. Poll until COMPLETED. client_balance_sat is your outbound liquidity, the sats you can spend or swap from the channel; lsp_balance_sat is your inbound. Usable outbound is client_balance_sat minus the channel reserve (at least 1,000 sat; 1% of capacity on larger channels). A BTC→asset swap of X sat sends X + 3,000 sat (the RGB HTLC minimum), so it needs client_balance_sat >= X + 3,000 sat + the reserve; client_balance_sat 4,000 leaves 3,000 sat outbound, which cannot carry any BTC→asset swap. An asset→BTC swap of X sat needs lsp_balance_sat >= X + 3,000 sat.',
     {
-      client_pubkey: z.string().describe('Your node pubkey (rln_get_node_info)'),
+      client_pubkey: z.string().describe('Your node pubkey (wdk_get_node_info)'),
       lsp_balance_sat: z.number().int().positive().describe('Inbound liquidity the LSP puts on its side, in sats'),
-      client_balance_sat: z.number().int().min(0).describe('Outbound liquidity pushed to you, in sats; you pay for it on top of the fee'),
+      client_balance_sat: z.number().int().min(0).describe('Outbound liquidity pushed to you, in sats; you pay for it on top of the fee. Your swap budget: a BTC→asset swap needs >= swap + 3,000 sat + reserve'),
       // These default server-side when omitted, so a deterministic recipe
       // doesn't have to supply LSPS1 plumbing it doesn't care about.
       required_channel_confirmations: z.number().int().min(0).optional().describe('0 for zero-conf (default 0)'),
@@ -377,7 +425,7 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
     })
 }
 
-const PAY_INSTRUCTION = 'Pay amount_due_sat — never fee_sat alone, which excludes client_balance_sat and asset_price_sat. Lightning: rln_pay_invoice with payment.bolt11.invoice (the amount is encoded). On-chain fallback: rln_send_btc payment.onchain.amount_sat to payment.onchain.address. Never use spark_pay_lightning_invoice for LSP orders. Keep order_id + access_token and poll kaleidoswap_lsp_get_order until COMPLETED.'
+const PAY_INSTRUCTION = 'Pay amount_due_sat — never fee_sat alone, which excludes client_balance_sat and asset_price_sat. Lightning: wdk_pay_invoice with payment.bolt11.invoice (the amount is encoded). On-chain fallback: wdk_send_btc payment.onchain.amount_sat to payment.onchain.address. Never use spark_pay_lightning_invoice for LSP orders. Keep order_id + access_token and poll kaleidoswap_lsp_get_order until COMPLETED.'
 
 /**
  * Normalise an LSPS1 order so the amount to pay is unambiguous: the raw

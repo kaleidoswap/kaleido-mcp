@@ -4,6 +4,30 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor bumps may break).
 
+## [0.4.3] - 2026-10-08
+
+### Fixed
+
+- `kaleidoswap_atomic_init` checks the node's channels before contacting the maker. A swap the channels cannot
+  carry used to be quoted, created, whitelisted and executed, then fail on the maker with `NoRoute`. It now returns an
+  error with the shortfall, e.g. "Need 2,500 more sat outbound (have 3,000, swap 2,500 + 3,000 sat RGB HTLC
+  minimum)", and nothing is created. The rule follows RLN's swap routes:
+  - BTC→asset: some usable channel with `next_outbound_htlc_limit_msat` >= swap amount + `rgb_htlc_min_msat`, and an
+    asset channel with inbound asset >= the amount bought and at least `rgb_htlc_min_msat` of BTC inbound.
+  - asset→BTC: an asset channel with outbound asset >= the amount sold and at least `rgb_htlc_min_msat` of BTC
+    outbound, and BTC inbound >= the amount bought + `rgb_htlc_min_msat`.
+
+  `wdk_atomic_taker` and `kaleidoswap_atomic_execute` run the same check on the swapstring. When the channels or
+  assets cannot be read the swap goes ahead with a `preflight_warning`.
+- Tool descriptions and hints named the legacy `rln_*` tools; they now name the `wdk_*` tools. The `rln_*` aliases
+  remain.
+
+### Changed
+
+- `kaleidoswap_lsp_estimate_fees` and `kaleidoswap_lsp_create_order` explain that `client_balance_sat` is your
+  outbound for swaps, and that a BTC→asset swap of X sat needs `client_balance_sat` >= X + 3,000 sat plus the channel
+  reserve.
+
 ## [0.4.2] - 2026-10-07
 
 ### Fixed

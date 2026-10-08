@@ -10,6 +10,7 @@ import { z } from 'zod'
 import type { WdkMcpServer } from '@tetherto/wdk-mcp-toolkit'
 import { AssetSchema, type RlnClient } from 'kaleido-sdk/rln'
 import type { CloseChannelRequest } from 'kaleido-sdk/rln'
+import { parseSwapstring, preflightError, preflightSwapCapacity } from './swap-preflight.js'
 
 const toFungibleAssignment = (
   value: number,
@@ -42,7 +43,7 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTr
     let matches = assets.filter(a => a.ticker?.toLowerCase() === key)
     if (!matches.length) matches = assets.filter(a => !a.ticker && a.name?.toLowerCase() === key)
     if (matches.length === 1) return { asset_id: matches[0].asset_id }
-    if (!matches.length) return { error: `ticker ${value} matches no asset on this node; pass the asset_id (see rln_list_assets)` }
+    if (!matches.length) return { error: `ticker ${value} matches no asset on this node; pass the asset_id (see wdk_list_assets)` }
     return { error: `ticker ${value} matches ${matches.length} assets: ${matches.map(a => a.asset_id).join(', ')}; pass the asset_id` }
   }
 
@@ -60,7 +61,7 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTr
   // -----------------------------------------------------------------------
   registerAliases(
     ['wdk_get_balances', 'rln_get_balances'],
-    'Get RLN wallet balances: BTC on-chain (vanilla/colored UTXOs) and Lightning balance. RGB asset balances come from rln_list_assets.',
+    'Get RLN wallet balances: BTC on-chain (vanilla/colored UTXOs) and Lightning balance. RGB asset balances come from wdk_list_assets.',
     { skip_sync: z.boolean().optional().describe('Skip blockchain sync for faster response (default: false)') },
     async ({ skip_sync = false }: { skip_sync?: boolean }) => {
       const [btc, node] = await Promise.all([rln.getBtcBalance(skip_sync), rln.getNodeInfo()])
@@ -309,17 +310,17 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTr
         public: is_public ?? false,
         with_anchors: false,
       })
-      return t(JSON.stringify({ ...result, note: 'Use rln_list_channels to monitor until status=Opened' }, null, 2))
+      return t(JSON.stringify({ ...result, note: 'Use wdk_list_channels to monitor until status=Opened' }, null, 2))
     },
   )
 
   // -----------------------------------------------------------------------
   registerAliases(
     ['wdk_close_channel', 'rln_close_channel'],
-    'Close a Lightning channel on the RLN node. Use force=true only for unresponsive peers. Get channel_id from rln_list_channels.',
+    'Close a Lightning channel on the RLN node. Use force=true only for unresponsive peers. Get channel_id from wdk_list_channels.',
     {
-      channel_id: z.string().describe('Channel ID from rln_list_channels'),
-      peer_pubkey: z.string().describe('Peer pubkey from rln_list_channels'),
+      channel_id: z.string().describe('Channel ID from wdk_list_channels'),
+      peer_pubkey: z.string().describe('Peer pubkey from wdk_list_channels'),
       force: z.boolean().optional().describe('Force close (unilateral). Default: false (cooperative close)'),
     },
     async ({
@@ -335,9 +336,9 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTr
   // -----------------------------------------------------------------------
   registerAliases(
     ['wdk_get_channel_id', 'rln_get_channel_id'],
-    'Resolve a temporary_channel_id (from rln_open_channel) to the permanent channel_id once the channel is established.',
+    'Resolve a temporary_channel_id (from wdk_open_channel) to the permanent channel_id once the channel is established.',
     {
-      temporary_channel_id: z.string().describe('Temporary channel ID from rln_open_channel'),
+      temporary_channel_id: z.string().describe('Temporary channel ID from wdk_open_channel'),
     },
     async ({ temporary_channel_id }: { temporary_channel_id: string }) =>
       t(JSON.stringify(await rln.getChannelId({ temporary_channel_id }), null, 2)),
@@ -486,13 +487,17 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTr
   // -----------------------------------------------------------------------
   registerAliases(
     ['wdk_atomic_taker', 'rln_atomic_taker'],
-    'Step 2 of atomic HTLC swap: whitelist the incoming HTLC on the RLN node. Call with the swapstring from kaleidoswap_atomic_init BEFORE calling kaleidoswap_atomic_execute.',
+    'Step 2 of atomic HTLC swap: whitelist the incoming HTLC on the RLN node. Call with the swapstring from kaleidoswap_atomic_init BEFORE calling kaleidoswap_atomic_execute. Checks first that your channels can carry the swap (same rule as kaleidoswap_atomic_init) and errors with the shortfall otherwise.',
     { swapstring: z.string().describe('Swapstring from kaleidoswap_atomic_init') },
     async ({ swapstring }: { swapstring: string }) => {
+      const sides = parseSwapstring(swapstring)
+      const pre = sides ? await preflightSwapCapacity(rln, sides) : { ok: true as const, warning: 'Channel capacity not checked: could not parse the swapstring.' }
+      if (!pre.ok) return preflightError(pre)
       await rln.whitelistSwap({ swapstring })
       return t(JSON.stringify({
         success: true,
-        note: 'HTLC whitelisted — now call rln_get_node_info for pubkey, then kaleidoswap_atomic_execute',
+        note: 'HTLC whitelisted — now call wdk_get_node_info for pubkey, then kaleidoswap_atomic_execute',
+        ...(pre.warning ? { preflight_warning: pre.warning } : {}),
       }, null, 2))
     },
   )

@@ -10,7 +10,7 @@ export function registerMppTools(server: WdkMcpServer): void {
 
   // -----------------------------------------------------------------------
   server.tool('mpp_request_challenge',
-    'Probe an MPP-protected URL and return the payment challenge. If server returns HTTP 402, parses WWW-Authenticate and returns the Lightning invoice, challenge_id, and amount. After this, use rln_mpp_pay or spark_mpp_pay to settle, then mpp_submit_credential to access the resource.',
+    'Probe an MPP-protected URL and return the payment challenge. If server returns HTTP 402, parses WWW-Authenticate and returns the Lightning invoice, challenge_id, and amount. After this, use wdk_mpp_pay or spark_mpp_pay to settle, then mpp_submit_credential to access the resource.',
     { url: z.string().describe('URL of the MPP-protected resource') },
     async ({ url }) => {
       try {
@@ -28,10 +28,10 @@ export function registerMppTools(server: WdkMcpServer): void {
 
   // -----------------------------------------------------------------------
   server.tool('mpp_submit_credential',
-    'Submit an MPP payment credential to access a protected resource. Call after rln_mpp_pay or spark_mpp_pay returns a credential JSON. Returns the resource data and a receipt.',
+    'Submit an MPP payment credential to access a protected resource. Call after wdk_mpp_pay or spark_mpp_pay returns a credential JSON. Returns the resource data and a receipt.',
     {
       url: z.string().describe('Same URL used in mpp_request_challenge'),
-      credential: z.string().describe('Credential JSON string from rln_mpp_pay or spark_mpp_pay'),
+      credential: z.string().describe('Credential JSON string from wdk_mpp_pay or spark_mpp_pay'),
     },
     async ({ url, credential: credStr }) => {
       try {
@@ -57,7 +57,7 @@ export function registerMppTools(server: WdkMcpServer): void {
 
   // -----------------------------------------------------------------------
   server.tool('l402_request_challenge',
-    'Request an L402 Lightning challenge for a premium endpoint (legacy L402 protocol). Returns a BOLT11 invoice and macaroon. After paying with rln_pay_invoice, call l402_fetch_resource with the preimage.',
+    'Request an L402 Lightning challenge for a premium endpoint (legacy L402 protocol). Returns a BOLT11 invoice and macaroon. After paying with wdk_pay_invoice, call l402_fetch_resource with the preimage.',
     {
       resource_url: z.string().describe('URL of the L402-protected resource'),
       price_sats: z.number().int().positive().optional().describe('Max price in sats willing to pay (default: 10)'),
@@ -69,7 +69,7 @@ export function registerMppTools(server: WdkMcpServer): void {
         if (res.status === 402) {
           const wwwAuth = res.headers.get('WWW-Authenticate') ?? ''
           const challenge = mpp.parseChallenge(resource_url, wwwAuth)
-          return t(JSON.stringify({ ...challenge, price_sats, next_step: 'Pay invoice via rln_pay_invoice, then call l402_fetch_resource with preimage as token' }, null, 2))
+          return t(JSON.stringify({ ...challenge, price_sats, next_step: 'Pay invoice via wdk_pay_invoice, then call l402_fetch_resource with preimage as token' }, null, 2))
         }
         return t(JSON.stringify({ info: `Server returned ${res.status} — may not require payment`, resource_url }, null, 2))
       } catch (err) {
