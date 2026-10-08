@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor bumps may break).
 
+## [Unreleased]
+
+### Fixed
+
+- `kaleidoswap_get_quote` returns, and quotes the maker with, the asset's RGB id when given a ticker (`to_asset_id:
+  "USDT"` now yields `to_asset.asset_id: "rgb:..."`), so the id matches what `rln_list_channels` reports and callers
+  that match quote legs to channels no longer see a ticker. `kaleidoswap_atomic_init` resolves a ticker the same
+  way, so a quote and its init always carry the same ids (the maker rejects an init whose ids differ from the quote).
+
 ## [0.4.4] - 2026-10-08
 
 ### Fixed

@@ -65,6 +65,12 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
     return { ticker: String(asset?.ticker ?? id), precision: asset?.precision ?? (isBtc(asset?.ticker ?? id) ? 11 : 0) }
   }
 
+  /** The asset's protocol id on `layer` (RGB_LN -> its rgb: id), so a ticker input still yields the id node channels report. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function canonicalId(asset: any, id: string, layer: string): string {
+    return asset?.protocol_ids?.[String(layer).split('_')[0]] ?? id
+  }
+
   /** Re-throw maker amount-range errors in display units of the leg they name. */
   async function withRangeErrors<T>(legs: { from: { ticker: string; precision: number }; to: { ticker: string; precision: number } }, fn: () => Promise<T>): Promise<T> {
     try {
@@ -145,9 +151,9 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
       const invalid = checkLegAmount(side, raw, limit, side === 'from' ? legs.to : legs.from)
       if (invalid) throw new Error(invalid)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const fromLeg: any = { asset_id: from_asset_id, layer: fLayer }
+      const fromLeg: any = { asset_id: canonicalId(fromAsset, from_asset_id, fLayer), layer: fLayer }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const toLeg: any = { asset_id: to_asset_id, layer: tLayer }
+      const toLeg: any = { asset_id: canonicalId(toAsset, to_asset_id, tLayer), layer: tLayer }
       if (side === 'from') fromLeg.amount = raw
       else toLeg.amount = raw
       const quote = await withRangeErrors(legs, () => maker.getQuote({ from_asset: fromLeg, to_asset: toLeg }))
@@ -155,8 +161,8 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
       const toPrecision = toAsset?.precision ?? (quote.to_asset as any).precision
       return t(JSON.stringify({
         rfq_id: quote.rfq_id,
-        from_asset: { asset_id: from_asset_id, ticker: quote.from_asset.ticker, layer: quote.from_asset.layer, amount_raw: quote.from_asset.amount, amount_display: maker.toDisplay(quote.from_asset.amount, fromAsset.precision) },
-        to_asset: { asset_id: to_asset_id, ticker: quote.to_asset.ticker, layer: quote.to_asset.layer, amount_raw: quote.to_asset.amount, amount_display: maker.toDisplay(quote.to_asset.amount, toPrecision) },
+        from_asset: { asset_id: fromLeg.asset_id, ticker: quote.from_asset.ticker, layer: quote.from_asset.layer, amount_raw: quote.from_asset.amount, amount_display: maker.toDisplay(quote.from_asset.amount, fromAsset.precision) },
+        to_asset: { asset_id: toLeg.asset_id, ticker: quote.to_asset.ticker, layer: quote.to_asset.layer, amount_raw: quote.to_asset.amount, amount_display: maker.toDisplay(quote.to_asset.amount, toPrecision) },
         price: quote.price,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         fee_base: (quote as any).fee?.base_fee ?? 0,
@@ -244,7 +250,13 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
         warning = pre.warning
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const res = await maker.initSwap({ rfq_id, from_asset: from_asset_id, from_amount: from_amount_raw, to_asset: to_asset_id, to_amount: to_amount_raw } as any)
+      const known: any[] = await maker.listAssets().then(r => r.assets ?? [], () => [])
+      const idFor = (id: string) => {
+        const a = findAsset(known, id) ?? findAsset(known, id.toUpperCase())
+        return canonicalId(a, id, deriveLayer(id, a))
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res = await maker.initSwap({ rfq_id, from_asset: idFor(from_asset_id), from_amount: from_amount_raw, to_asset: idFor(to_asset_id), to_amount: to_amount_raw } as any)
         .catch(async e => {
           const message = e instanceof Error ? e.message : String(e)
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
