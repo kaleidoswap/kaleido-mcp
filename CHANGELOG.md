@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor bumps may break).
 
-## [Unreleased]
+## [0.4.5] - 2026-10-08
 
 ### Fixed
 
@@ -12,6 +12,11 @@ All notable changes to this project are documented here. The format follows
   "USDT"` now yields `to_asset.asset_id: "rgb:..."`), so the id matches what `rln_list_channels` reports and callers
   that match quote legs to channels no longer see a ticker. `kaleidoswap_atomic_init` resolves a ticker the same
   way, so a quote and its init always carry the same ids (the maker rejects an init whose ids differ from the quote).
+
+### Changed
+
+- `kaleidoswap_lsp_estimate_fees` and `kaleidoswap_lsp_create_order` say that one payment is capped at about 10% of
+  the channel capacity, so a BTC→asset swap of X sat needs a channel of at least 10 × (X + 3,000 sat).
 
 ## [0.4.4] - 2026-10-08
 
