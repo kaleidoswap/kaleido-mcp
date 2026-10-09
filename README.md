@@ -135,7 +135,7 @@ The active network is printed to stderr at startup.
 
 ## Environment variables
 
-All variables are optional. Empty values are treated as unset.
+Local signet runs with defaults. Mainnet requires an API URL; remote HTTP binding requires an auth token. Empty values are treated as unset.
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -157,7 +157,8 @@ All variables are optional. Empty values are treated as unset.
 | `KALEIDOSWAP_MAKER_URL` | signet maker | Boltz `/v2` maker for the `kaleidoswap_submarine_*` tools (default `https://maker.signet.kaleidoswap.com/v2`; no default on mainnet) |
 | `KALEIDOSWAP_SWAP_DIR` | `~/.kaleido-mcp/swaps` | Where submarine swap records are kept. They hold what a refund needs besides the mnemonic: keep this directory |
 | `PORT` | — | Serve Streamable HTTP on this port instead of stdio (`GET /health` for probes) |
-| `MCP_AUTH_TOKEN` | — | Require `Authorization: Bearer <token>` in HTTP mode |
+| `MCP_HOST` | `127.0.0.1` | HTTP bind address; non-loopback requires `MCP_AUTH_TOKEN` |
+| `MCP_AUTH_TOKEN` | — | Require `Authorization: Bearer <token>` in HTTP mode; mandatory for non-loopback listeners |
 
 ## Tools
 
@@ -177,6 +178,17 @@ tools and 10 Liquid wallet tools (the Liquid ones also come with `LIQUID_MNEMONI
 | Market data | `l402_get_` | `price`, `market_data`, `ohlcv`, `sentiment` |
 
 `rln_*` and bare `get_*` names are legacy aliases of the `wdk_*` and `l402_get_*` tools.
+
+### HTTP transport
+
+The next release binds HTTP to `127.0.0.1` by default. Connect to `/mcp`
+(`/` is retained for existing clients). Each client owns an MCP session; clients
+should terminate it when finished. Idle sessions expire after 30 minutes.
+`GET /health` checks process availability, not wallet or maker readiness.
+
+For container or remote access, set `MCP_HOST=0.0.0.0` and `MCP_AUTH_TOKEN`.
+The Docker image sets the bind address and requires the token at startup.
+Use TLS at the reverse proxy for remote access. Stdio configuration is unchanged.
 
 ### Atomic swap flow
 
@@ -205,6 +217,13 @@ through [`@kaleidorg/swap-sdk`](https://www.npmjs.com/package/@kaleidorg/swap-sd
 3. `kaleidoswap_submarine_fund { swap_id }` — **spend**: locks that amount from the Liquid wallet. Takes only the swap id;
    amount, asset and address come from the stored swap
 4. `kaleidoswap_submarine_status { swap_id }` — `transaction.claimed` means the invoice was paid
+
+Funding attempts are reserved on disk before broadcasting. A timeout or crash can
+leave the result unknown: `status` then returns `funded: null` and
+`recovery_required: true`, and another `fund` call is blocked. Inspect the wallet's
+transactions and the maker status before any manual recovery. Do not delete a
+`.funding` marker to retry blindly. Key reservations (`key-*.reserved`) must also
+be preserved with the swap records. These protections apply in the next release.
 
 The per-swap refund key is derived from the wallet mnemonic and never leaves the server. Each swap's record is written
 to `KALEIDOSWAP_SWAP_DIR` before it can be funded. If a funded swap fails, the funds stay in the lockup until refunded;

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Keep independent HTTP sessions alive across requests; bound idle session retention and return request errors without crashing the server.
+- Default HTTP to loopback; require authentication for remote binding. Docker uses Node 22 and requires MCP_AUTH_TOKEN.
+- Reserve submarine funding attempts before broadcast, atomically persist records, and report ambiguous funding outcomes for manual reconciliation. Concurrent creates reserve distinct refund-key indices.
+
+
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/) (pre-1.0: minor bumps may break).

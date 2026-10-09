@@ -27,16 +27,16 @@
  *   KALEIDOSWAP_MAKER_URL   — Boltz /v2 maker for submarine swaps (default: the signet maker; none on mainnet)
  *   KALEIDOSWAP_SWAP_DIR    — where submarine swap records (refund material) are kept (default: ~/.kaleido-mcp/swaps)
  *   PORT                    — Enable StreamableHTTP on this port (default: stdio)
- *   MCP_AUTH_TOKEN          — Bearer token for HTTP mode
+ *   MCP_HOST                — HTTP bind address (default: 127.0.0.1)
+ *   MCP_AUTH_TOKEN          — Bearer token for HTTP mode; required for non-loopback binding
  *
  * Usage:
  *   npx -y kaleido-mcp
  *   PORT=3010 WDK_SEED="..." node dist/index.js
  */
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
-import { createServer } from './server.js'
-import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { createMcpHttpServer, httpHost } from './http.js'
+import { createServer, type KaleidoMcpConfig } from './server.js'
 
 const NETWORK_PRESETS = {
   signet: { kaleidoswapApiUrl: 'https://api.signet.kaleidoswap.com', sparkNetwork: 'REGTEST', liquidNetwork: 'testnet', rgbProxyEndpoint: 'rpcs://proxy.iriswallet.com/0.2/json-rpc' },
@@ -66,7 +66,10 @@ const KALEIDO_URL: string = process.env.KALEIDOSWAP_API_URL || process.env.KALEI
   process.exit(1)
 })()
 const RGB_PROXY   = process.env.RGB_PROXY_ENDPOINT || preset.rgbProxyEndpoint
-const PORT        = process.env.PORT ? parseInt(process.env.PORT, 10) : null
+const PORT = process.env.PORT ? Number(process.env.PORT) : null
+if (PORT !== null && (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535)) {
+  throw new Error('PORT must be an integer between 1 and 65535')
+}
 
 process.stderr.write(`[kaleido-mcp] network: ${NETWORK}\n`)
 
@@ -77,7 +80,7 @@ if (!WDK_SEED) {
 }
 
 async function main() {
-  const server = await createServer({
+  const config: KaleidoMcpConfig = {
     wdkSeed: WDK_SEED,
     sparkNetwork: SPARK_NET,
     sparkScanApiKey: process.env.SPARK_SCAN_API_KEY,
@@ -92,31 +95,18 @@ async function main() {
     swapNetwork: NETWORK === 'mainnet' ? 'mainnet' : 'signet',
     makerV2Url: process.env.KALEIDOSWAP_MAKER_URL,
     swapStateDir: process.env.KALEIDOSWAP_SWAP_DIR,
-  })
+  }
 
   const label = `${NETWORK}: Spark(${WDK_SEED ? SPARK_NET : 'disabled'}) + Liquid(${LIQUID_MNEMONIC ? LIQUID_NET : 'disabled'}) + RLN(${RLN_URL}) + KaleidoSwap(${KALEIDO_URL})`
 
   if (PORT) {
-    const AUTH_TOKEN = process.env.MCP_AUTH_TOKEN ?? null
-    const httpServer = createHttpServer(async (req: IncomingMessage, res: ServerResponse) => {
-      if (req.method === 'GET' && req.url === '/health') {
-        res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ ok: true }))
-        return
-      }
-      if (AUTH_TOKEN && req.headers['authorization'] !== `Bearer ${AUTH_TOKEN}`) {
-        res.writeHead(401, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ error: 'Unauthorized' }))
-        return
-      }
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
-      res.on('close', () => transport.close().catch(() => {}))
-      await server.connect(transport)
-      await transport.handleRequest(req, res)
-    })
-    httpServer.listen(PORT, '0.0.0.0', () =>
-      process.stderr.write(`[kaleido-mcp] HTTP on port ${PORT} — ${label}\n`))
+    const token = process.env.MCP_AUTH_TOKEN || undefined
+    const host = httpHost(process.env.MCP_HOST || undefined, token)
+    const httpServer = createMcpHttpServer(() => createServer(config), token)
+    httpServer.listen(PORT, host, () =>
+      process.stderr.write(`[kaleido-mcp] HTTP on ${host}:${PORT} — ${label}\n`))
   } else {
+    const server = await createServer(config)
     const transport = new StdioServerTransport()
     await server.connect(transport)
     process.stderr.write(`[kaleido-mcp] stdio connected — ${label}\n`)

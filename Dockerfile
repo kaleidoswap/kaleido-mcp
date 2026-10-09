@@ -1,4 +1,4 @@
-FROM node:20-bookworm-slim AS builder
+FROM node:22-bookworm-slim AS builder
 WORKDIR /workspace
 
 RUN apt-get update \
@@ -14,11 +14,13 @@ RUN npm run build \
   && node -e "const fs=require('fs');const p=require('./package.json');for(const n of Object.keys(p.peerDependencies)){p.dependencies[n]=p.devDependencies[n];delete p.devDependencies[n]}fs.writeFileSync('package.json',JSON.stringify(p,null,2))" \
   && npm install --omit=dev --ignore-scripts --no-audit --no-fund
 
-FROM node:20-bookworm-slim
+FROM node:22-bookworm-slim
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=3013
+# Container ingress requires MCP_AUTH_TOKEN at runtime.
+ENV MCP_HOST=0.0.0.0
 
 COPY --from=builder /workspace/dist ./dist/
 COPY --from=builder /workspace/package.json ./
