@@ -16,7 +16,8 @@
  * @kaleidorg/swap-sdk is an optional peer (it needs Node >= 22): it is imported on
  * first use, so the tools register on any runtime and report how to install it.
  */
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, open, access } from 'node:fs/promises'
+import { atomicWrite, reserveFunding, syncDirectory } from './swap-storage.js'
 import { join } from 'node:path'
 import { z } from 'zod'
 import type { WdkMcpServer } from '@tetherto/wdk-mcp-toolkit'
@@ -96,14 +97,15 @@ export function registerSubmarineTools(server: WdkMcpServer, config: SubmarineTo
 
   async function save(record: SwapRecord): Promise<void> {
     const m = await sdk()
-    await mkdir(config.stateDir, { recursive: true })
     // toJson, not JSON.stringify: the SDK response carries bigint amounts.
-    await writeFile(recordPath(record.id), m.toJson(record, 2))
+    await atomicWrite(recordPath(record.id), m.toJson(record, 2))
   }
 
   async function load(id: string): Promise<SwapRecord> {
     try {
-      return JSON.parse(await readFile(recordPath(id), 'utf8')) as SwapRecord
+      const record = JSON.parse(await readFile(recordPath(id), 'utf8')) as SwapRecord
+      if (record.id !== id) throw new Error('Swap id mismatch')
+      return record
     } catch {
       throw new Error(`No submarine swap "${id}" was created by this server (looked in ${config.stateDir}).`)
     }
@@ -119,7 +121,19 @@ export function registerSubmarineTools(server: WdkMcpServer, config: SubmarineTo
         if (BigInt(rec.index) > max) max = BigInt(rec.index)
       } catch { /* not a swap record */ }
     }
-    return max + 1n
+    // Exclusive reservations also cover in-flight creates and failed creates.
+    // Keep them permanently so a restart cannot reuse a refund key.
+    await mkdir(config.stateDir, { recursive: true, mode: 0o700 })
+    for (let index = max + 1n; ; index++) {
+      try {
+        const reservation = await open(join(config.stateDir, `key-${index}.reserved`), 'wx', 0o600)
+        try { await reservation.sync() } finally { await reservation.close() }
+        await syncDirectory(config.stateDir)
+        return index
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      }
+    }
   }
 
   // ── tools ─────────────────────────────────────────────────────────────
@@ -218,6 +232,9 @@ export function registerSubmarineTools(server: WdkMcpServer, config: SubmarineTo
         if (record.from === 'BTC') return fail('On-chain BTC submarine swaps are not funded by this server (no on-chain BTC wallet); use L-USDT or L-BTC.')
         if (!config.liquid) return fail('No Liquid wallet configured (LIQUID_MNEMONIC or WDK_SEED): cannot fund the lockup.')
 
+        if (record.network !== config.network || record.makerUrl !== makerUrl()) {
+          return fail('Swap network or maker differs from this server configuration; restore the original configuration before funding.')
+        }
         const { status } = await (await client()).swap(swap_id)
         if (status !== 'swap.created' && status !== 'invoice.set') {
           return fail(`Swap ${swap_id} is in status "${status}" and can no longer be funded.`)
@@ -225,6 +242,7 @@ export function registerSubmarineTools(server: WdkMcpServer, config: SubmarineTo
 
         const amount = BigInt(String(record.response.expectedAmount))
         const recipient = String(record.response.address)
+        await reserveFunding(`${recordPath(swap_id)}.funding`)
         const result = record.from === 'L-USDT'
           ? await config.liquid.sendAsset({ assetId: String(record.fromAssetId), recipient, amount })
           : await config.liquid.transfer({ recipient, amount })
@@ -253,6 +271,10 @@ export function registerSubmarineTools(server: WdkMcpServer, config: SubmarineTo
     async ({ swap_id }: { swap_id: string }) => {
       try {
         const record = await load(swap_id).catch(() => undefined)
+        if (record && (record.network !== config.network || record.makerUrl !== makerUrl())) {
+          return fail('Swap network or maker differs from this server configuration; restore the original configuration to query it.')
+        }
+        const attempted = record ? await access(`${recordPath(swap_id)}.funding`).then(() => true, () => false) : false
         const s = await (await client()).swap(swap_id)
         const status = String(s.status)
         const failed = FAILED.has(status)
@@ -262,7 +284,13 @@ export function registerSubmarineTools(server: WdkMcpServer, config: SubmarineTo
           done: status === 'transaction.claimed',
           failed,
           ...(s.failureReason ? { failure_reason: s.failureReason } : {}),
-          ...(record ? { funded: !!record.fundingTxid, funding_txid: record.fundingTxid ?? null } : {}),
+          ...(record ? {
+            funded: record.fundingTxid ? true : attempted ? null : false,
+            funding_txid: record.fundingTxid ?? null,
+            funding_attempted: attempted || !!record.fundingTxid,
+            recovery_required: attempted && !record.fundingTxid,
+            ...(attempted && !record.fundingTxid ? { recovery: 'A broadcast was attempted but its result is unknown. Reconcile wallet transactions and maker status before taking further action; do not retry funding automatically.' } : {}),
+          } : {}),
           ...(failed && record?.fundingTxid
             ? { refund: `Funds are locked until refunded. The refund key derives from the wallet mnemonic at swap index ${record.index}; the swap record is ${recordPath(swap_id)}.` }
             : {}),
