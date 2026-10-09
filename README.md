@@ -3,7 +3,7 @@
 [![npm](https://img.shields.io/npm/v/kaleido-mcp)](https://www.npmjs.com/package/kaleido-mcp)
 [![CI](https://github.com/kaleidoswap/kaleido-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/kaleidoswap/kaleido-mcp/actions/workflows/ci.yml)
 
-One MCP server that gives an AI agent the whole KaleidoSwap stack over a single connection:
+Connect an AI assistant to KaleidoSwap through one Model Context Protocol (MCP) server. Your MCP client runs the assistant; this server provides the tools:
 
 - **KaleidoSwap DEX** — assets, pairs, quotes, atomic BTC ↔ RGB swaps, LSP channel purchases
 - **RGB Lightning Node (RLN)** — on-chain BTC, RGB assets, Lightning channels and payments
@@ -15,22 +15,33 @@ One MCP server that gives an AI agent the whole KaleidoSwap stack over a single 
 
 See [docs/TOOLS.md](docs/TOOLS.md) for every tool and its parameters.
 
-kaleido-mcp supersedes the standalone `wdk-wallet-mcp` (RLN), `wdk-wallet-spark-mcp` and
-`wdk-wallet-liquid-mcp` servers: their tools are included here under the same names.
+## Choose what to connect
 
-> **Beta software.** Start on signet. Mainnet use is at your own risk.
+| Goal | What you need |
+|---|---|
+| Read assets, pairs and quotes | An MCP client and Node.js; no seed or local node |
+| Use an RGB/Lightning wallet | An unlocked RGB Lightning Node and `RLN_NODE_URL` |
+| Use Spark | The optional Spark wallet package and `WDK_SEED` |
+| Use Liquid | The optional Liquid wallet package and `LIQUID_MNEMONIC` |
+| Build your own AI agent | [KaleidoMind](https://github.com/kaleidoswap/kaleido-mind), which can consume this MCP |
+
+[Quickstart](#quickstart-signet) · [Configuration](#environment-variables) ·
+[Tool reference](docs/TOOLS.md) · [Troubleshooting](#troubleshooting) ·
+[Migration](#migration-from-older-servers)
+
+This is beta software. The default network is signet, for development with test funds.
 
 ## Quickstart (signet)
 
-Requires Node.js 20 or newer.
+Requires Node.js 20 or newer; submarine swaps need Node.js 22 or newer.
 
 ```bash
 npx -y kaleido-mcp
 ```
 
-The server speaks MCP over stdio, logs to stderr and defaults to signet. With no other configuration
+When launched directly, this command waits for MCP requests; it is not an interactive chat. Add it to your client using the configuration below. The server speaks MCP over stdio, logs to stderr and defaults to signet. With no other configuration
 you get the KaleidoSwap market tools (assets, pairs, quotes), MPP/L402 and market data tools straight
-away. Wallet and swap tools need an RGB Lightning Node (see [Running a signet node](#running-a-signet-rgb-lightning-node)).
+away. RGB wallet and atomic RGB swap tools need an RGB Lightning Node (see [Running a signet node](#running-a-signet-rgb-lightning-node)).
 
 The Spark and Liquid wallets are optional add-ons: they need a `WDK_SEED` (or `LIQUID_MNEMONIC`) **and**
 their wallet package, which is not installed by default to keep `npx` fast:
@@ -144,7 +155,7 @@ Local signet runs with defaults. Mainnet requires an API URL; remote HTTP bindin
 | `KALEIDO_API_URL` | — | Alias for `KALEIDOSWAP_API_URL`; also passed to the `kaleido` CLI as `--api-url` |
 | `RLN_NODE_URL` | `http://localhost:3001` | RGB Lightning Node HTTP API used by the `wdk_*` and swap tools |
 | `RGB_PROXY_ENDPOINT` | per network | RGB proxy used by `wdk_create_rgb_invoice` / `wdk_send_asset` when no `transport_endpoints` are passed |
-| `WDK_SEED` | — | BIP-39 mnemonic. Enables the Spark and WDK wallet tools (needs `@tetherto/wdk-wallet-spark` installed); without it they are not loaded at all |
+| `WDK_SEED` | — | BIP-39 mnemonic. Enables Spark and the camelCase WDK built-in tools (needs `@tetherto/wdk-wallet-spark` installed); without it they are not loaded at all |
 | `SPARK_NETWORK` | per network | `MAINNET` or `REGTEST` |
 | `LIQUID_MNEMONIC` | `WDK_SEED` | BIP-39 mnemonic for the Liquid wallet. Enables the `liquid_*` tools (needs `@kaleidorg/wdk-wallet-liquid` installed); without it (and without `WDK_SEED`) the Liquid modules are not loaded |
 | `LIQUID_NETWORK` | per network | `mainnet`, `testnet` or `regtest` |
@@ -162,8 +173,10 @@ Local signet runs with defaults. Mainnet requires an API URL; remote HTTP bindin
 
 ## Tools
 
-62 tools (plus 28 legacy aliases) are always available; `WDK_SEED` adds 30 Spark and WDK wallet
-tools and 10 Liquid wallet tools (the Liquid ones also come with `LIQUID_MNEMONIC` alone), provided their optional wallet packages are installed. The full, generated list with parameters is in [docs/TOOLS.md](docs/TOOLS.md) (regenerate with `npm run docs:tools`).
+The catalog depends on the configured wallets and optional packages. RGB node,
+DEX and market tools are registered without a seed; using node tools still needs
+a reachable RLN node. Spark and Liquid tools appear when their wallet packages
+and mnemonics are configured. The full, generated list with parameters is in [docs/TOOLS.md](docs/TOOLS.md) (regenerate with `npm run docs:tools`).
 
 | Group | Prefix | Highlights |
 | --- | --- | --- |
@@ -286,6 +299,32 @@ npm run dev          # run from source with tsx
 
 `kaleido-mcp` is a thin composition layer: domain logic belongs in
 [`kaleido-sdk`](https://github.com/kaleidoswap/kaleido-sdk) and the WDK packages, not here.
+
+## Troubleshooting
+
+| What you see | What to check |
+|---|---|
+| The terminal waits after startup | Expected for stdio. Connect an MCP client and ask it to list the tools. |
+| Spark or Liquid tools are missing | Install the optional wallet package and set its mnemonic in the client's environment. Read the startup install hint. |
+| Tools are listed but node calls fail | Verify `RLN_NODE_URL`, start the node and unlock its wallet. Discovery alone does not check node readiness. |
+| A quote succeeds but a swap fails | Check channel capacity, asset allocation and quote expiry. A quote does not prove that your wallet can settle it. |
+| HTTP returns 401 | Configure the same bearer token in the client and `MCP_AUTH_TOKEN` in the server. |
+| An HTTP session expires | Reconnect the client; idle sessions expire after 30 minutes in the next release. |
+| A submarine funding result is unknown | Follow [the recovery guidance](#submarine-swap-flow-pay-lightning-from-liquid); do not automatically retry. |
+
+## Migration from older servers
+
+Use this server for new integrations. It replaces the wallet servers
+`wdk-wallet-mcp`, `wdk-wallet-spark-mcp`, `wdk-wallet-liquid-mcp`, plus the older
+`kaleidoswap-mcp`, `l402-gateway-mcp` and `kaleido-node-mcp` entry points.
+
+- Replace the old launch command with `npx -y kaleido-mcp`.
+- For Spark, replace `WDK_SPARK_SEED` with `WDK_SEED` and install the optional package.
+- Existing `rln_*` and bare market aliases remain supported. New raw MCP integrations
+  should use `wdk_*` and `l402_*`.
+- REST order-based swap tools were removed. Use the [atomic swap flow](#atomic-swap-flow).
+- Compare your arguments against the [generated schemas](docs/TOOLS.md); naming
+  compatibility does not imply that every historical workflow is still supported.
 
 ## License
 
