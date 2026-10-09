@@ -1,11 +1,17 @@
 # Changelog
 
-## Unreleased
+## [0.5.0] - 2026-10-09
 
 - Keep independent HTTP sessions alive across requests; bound idle session retention and return request errors without crashing the server.
 - Default HTTP to loopback; require authentication for remote binding. Docker uses Node 22 and requires MCP_AUTH_TOKEN.
 - Reserve submarine funding attempts before broadcast, atomically persist records, and report ambiguous funding outcomes for manual reconciliation. Concurrent creates reserve distinct refund-key indices.
 
+### Migration
+
+- HTTP binds to `127.0.0.1` by default. Remote/container deployments must explicitly set `MCP_HOST` and `MCP_AUTH_TOKEN`; clients send `Authorization: Bearer <token>`.
+- Initialize an MCP session and reuse its `Mcp-Session-Id`. Idle sessions expire after 30 minutes; clients must initialize again after expiry.
+- Persist the swap storage directory across restarts. An ambiguous funding result requires manual chain/wallet reconciliation; do not delete reservation markers or automatically retry a broadcast.
+- No live funded swap was executed for this release. Automated checks cover session handling, reservations and mocked funding failures.
 
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
