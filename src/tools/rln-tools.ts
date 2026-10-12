@@ -90,7 +90,7 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTr
   registerAliases(
     ['wdk_list_assets', 'rln_list_assets'],
     'List all RGB assets held by the RLN node (NIA, UDA, CFA schemas) with their balances. Returns asset_id, ticker, name, precision and balance { settled, future, spendable, offchain_outbound, offchain_inbound } in raw units (display = raw / 10^precision), so one call answers "what do I hold".',
-    { schemas: z.array(z.enum(['Nia', 'Uda', 'Cfa'])).optional() },
+    { schemas: z.array(z.enum(['Nia', 'Uda', 'Cfa', 'NIA', 'UDA', 'CFA', 'nia', 'uda', 'cfa']).transform((value) => (value[0].toUpperCase() + value.slice(1).toLowerCase()) as 'Nia' | 'Uda' | 'Cfa')).optional() },
     async ({ schemas = [] }: { schemas?: Array<'Nia' | 'Uda' | 'Cfa'> }) => {
       const assets = await rln.listAssets(schemas.map(schema => AssetSchema[schema]))
       const all = [
@@ -256,6 +256,9 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTr
       const totalIn = channels.reduce((s, c) => s + (c.inbound_balance_msat ?? 0), 0)
       return t(JSON.stringify({
         channel_count: channels.length,
+        total_outbound_sat: totalOut / 1000,
+        total_inbound_sat: totalIn / 1000,
+        units: "Fields ending in _msat are millisatoshis: divide by 1000 for sats. RGB asset amounts are atomic units, never sats; use rln_list_assets for ticker and precision.",
         total_outbound_msat: totalOut,
         total_inbound_msat: totalIn,
         channels,
@@ -523,10 +526,10 @@ export function registerRlnTools(server: WdkMcpServer, rln: RlnClient, defaultTr
     'Get atomic swap status by payment_hash from the RLN node.',
     {
       payment_hash: z.string().describe('Payment hash from kaleidoswap_atomic_init'),
-      taker: z.boolean().optional().describe('Filter for taker-side swap'),
+      taker: z.boolean().optional().describe('Read the taker-side swap (default true); false reads maker-side swaps.'),
     },
     async ({ payment_hash, taker }: { payment_hash: string; taker?: boolean }) => {
-      const request = { payment_hash, ...(taker !== undefined ? { taker } : {}) } as Parameters<RlnClient['getSwap']>[0]
+      const request = { payment_hash, taker: taker ?? true } as Parameters<RlnClient['getSwap']>[0]
       return t(JSON.stringify(await rln.getSwap(request), null, 2))
     },
   )

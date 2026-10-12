@@ -159,13 +159,21 @@ export function registerKaleidoswapTools(server: WdkMcpServer, maker: MakerClien
       const quote = await withRangeErrors(legs, () => maker.getQuote({ from_asset: fromLeg, to_asset: toLeg }))
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const toPrecision = toAsset?.precision ?? (quote.to_asset as any).precision
+      const fee = quote.fee
+      const feeAsset = fee ? findAsset(assets, fee.fee_asset) : undefined
+      const feePrecision = fee?.fee_asset_precision ?? feeAsset?.precision
+      const feeDisplay = fee && feePrecision != null
+        ? `${maker.toDisplay(fee.final_fee, feePrecision)} ${feeAsset?.ticker ?? fee.fee_asset}`
+        : undefined
       return t(JSON.stringify({
         rfq_id: quote.rfq_id,
         from_asset: { asset_id: fromLeg.asset_id, ticker: quote.from_asset.ticker, layer: quote.from_asset.layer, amount_raw: quote.from_asset.amount, amount_display: maker.toDisplay(quote.from_asset.amount, fromAsset.precision) },
         to_asset: { asset_id: toLeg.asset_id, ticker: quote.to_asset.ticker, layer: quote.to_asset.layer, amount_raw: quote.to_asset.amount, amount_display: maker.toDisplay(quote.to_asset.amount, toPrecision) },
         price: quote.price,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        fee_base: (quote as any).fee?.base_fee ?? 0,
+        fee_base: quote.fee?.base_fee ?? 0,
+        ...(fee ? { fee } : {}),
+        ...(feeDisplay ? { fee_display: feeDisplay } : {}),
         expires_at: new Date(quote.expires_at * 1000).toISOString(),
       }, null, 2))
     })
